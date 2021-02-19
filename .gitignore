@@ -4,3 +4,4 @@ compile_commands.json
 out
 .idea
 cmake-build-debug
+.vs

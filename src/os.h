@@ -79,7 +79,7 @@ void red_panic(const char* file, size_t line, const char* function, const char* 
 void os_abort();
 void os_exit(s32 code);
 void* allocate_chunk(size_t size);
-void* reallocate_chunk(void* allocated_address, usize size);
+void* reallocate_chunk(void* allocated_address, s64 size);
 void  mem_init(void);
 void os_print_memory_usage(void);
 void os_debug_break(void);
@@ -190,7 +190,7 @@ StringBuffer* os_file_load(const char* name);
 
 #define sb_assert_not_empty(sb) redassert(sb); redassert(sb->len)
 #define sb_at(sb, i) (sb->ptr[i])
-static inline size_t sb_len(StringBuffer* sb)
+static inline s64 sb_len(StringBuffer* sb)
 {
     redassert(sb);
     return sb->len - 1;
@@ -202,8 +202,8 @@ static inline char* sb_ptr(StringBuffer* sb)
     return sb->ptr;
 }
 
-static inline void sb_ensure_capacity(StringBuffer* sb, size_t new_capacity);
-static inline void sb_resize(StringBuffer* sb, size_t new_length)
+static inline void sb_ensure_capacity(StringBuffer* sb, s64 new_capacity);
+static inline void sb_resize(StringBuffer* sb, s64 new_length)
 {
     new_length = new_length + 1;
     redassert(new_length != SIZE_MAX);
@@ -212,14 +212,14 @@ static inline void sb_resize(StringBuffer* sb, size_t new_length)
     sb_at(sb, sb_len(sb)) = 0;
 }
 
-static inline void sb_ensure_capacity(StringBuffer* sb, size_t new_capacity)
+static inline void sb_ensure_capacity(StringBuffer* sb, s64 new_capacity)
 {
     if (sb->cap >= new_capacity)
     {
         return;
     }
 
-    usize better_capacity = sb->cap;
+    s64 better_capacity = sb->cap;
     do
     {
         better_capacity = better_capacity * 5 / 2 + 8;
@@ -230,11 +230,11 @@ static inline void sb_ensure_capacity(StringBuffer* sb, size_t new_capacity)
 }
 
 
-static inline void sb_append_mem(SB* sb, const char* mem, s32 mem_len)
+static inline void sb_append_mem(SB* sb, const char* mem, s64 mem_len)
 {
     sb_assert_not_empty(sb);
     redassert(mem_len >= 0);
-    s32 old_len = sb_len(sb);
+    s64 old_len = sb_len(sb);
     sb_resize(sb, old_len + mem_len);
     memcpy(sb_ptr(sb) + old_len, mem, mem_len);
     sb_at(sb, sb_len(sb)) = 0;
@@ -268,7 +268,7 @@ static inline StringBuffer* sb_alloc(void)
     return sb_alloc_fixed(0);
 }
 
-static inline void sb_memcpy(SB* sb, const char* ptr, size_t len)
+static inline void sb_memcpy(SB* sb, const char* ptr, s64 len)
 {
     redassert(len != SIZE_MAX);
     sb_resize(sb, len);

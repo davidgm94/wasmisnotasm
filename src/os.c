@@ -75,7 +75,7 @@ void os_init(void)
 #ifdef RED_OS_WINDOWS
     GetSystemInfo(&system_info);
     page_size = system_info.dwPageSize > system_info.dwAllocationGranularity ? system_info.dwPageSize : system_info.dwAllocationGranularity;
-    logical_thread_count = system_info.dwNumberOfProcessors;
+    logical_thread_count = (u16)system_info.dwNumberOfProcessors;
     QueryPerformanceFrequency(&pfreq);
 #elif defined(RED_OS_LINUX)
     page_size = getpagesize();
@@ -201,12 +201,12 @@ static void os_windows_create_command_line(SB* command_line, const char* exe, co
     sb_append_str(command_line, exe);
     sb_append_char(command_line, '\"');
 
-    for (usize i = 0; i < command_line->len; i++)
+    for (s64 i = 0; i < command_line->len; i++)
     {
         sb_append_str(command_line, " \"");
         const char* arg = args[i];
-        usize arg_len = strlen(arg);
-        for (usize j = 0; j < arg_len; j++)
+        s64 arg_len = strlen(arg);
+        for (s64 j = 0; j < arg_len; j++)
         {
             if (arg[j] == '\"')
             {
@@ -328,7 +328,7 @@ s32 os_load_dynamic_library(const char* dyn_lib_name)
         exit(1);
     }
 
-    s32 id = dll_count++;
+    s32 id = shared_library_count++;
     loaded_dlls[id] = dll_instance;
     return id;
 #else
@@ -394,8 +394,8 @@ StringBuffer* os_file_load(const char *name)
         return NULL;
     }
 
-    rc = fread(sb_ptr(file_buffer), 1, length, file);
-    if (rc != (size_t) length)
+    rc = (s32)fread(sb_ptr(file_buffer), 1, length, file);
+    if (rc != length)
     {
         return NULL;
     }
@@ -555,7 +555,7 @@ void* allocate_chunk(usize size)
     Allocation* allocation = (Allocation*)((uptr)aligned_address - sizeof(Allocation));
     redassert(sizeof(Allocation) == (sizeof(u32) * 2));
     allocation->alignment = DEFAULT_ALIGNMENT;
-    allocation->size = pointer_displacement;
+    allocation->size = (u32)pointer_displacement;
     redassert(allocation->size != 0);
     m_page_allocator.available_address = new_available_address;
     m_page_allocator.allocation_count++;
@@ -574,7 +574,7 @@ void* allocate_chunk(usize size)
     return (void*)aligned_address;
 }
 
-void* reallocate_chunk(void* allocated_address, usize size)
+void* reallocate_chunk(void* allocated_address, s64 size)
 {
     redassert(size > 0);
     redassert(size < UINT32_MAX);

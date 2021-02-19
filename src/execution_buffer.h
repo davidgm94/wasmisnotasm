@@ -1,19 +1,30 @@
 #include "types.h"
 #include "os.h"
 #include <stdio.h>
+#ifdef RED_OS_WINDOWS
+#define WIN32_LEAN_AND_MEAN
+#define VC_EXTRALEAN
+#include <Windows.h>
+#else
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 typedef struct
 {
     u8* ptr;
-    u32 len;
-    u32 cap;
+    s64 len;
+    s64 cap;
 } ExecutionBuffer;
 
-static inline ExecutionBuffer give_me(u64 capacity)
+static inline ExecutionBuffer give_me(s64 capacity)
 {
-    void* ptr = mmap(null, capacity, PROT_WRITE | PROT_READ | PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    void* ptr;
+#ifdef RED_OS_WINDOWS
+    ptr = VirtualAlloc(NULL, capacity, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+#else
+    ptr = mmap(null, capacity, PROT_WRITE | PROT_READ | PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+#endif
     redassert(ptr);
 
     ExecutionBuffer eb =
@@ -74,12 +85,12 @@ static inline void print_binary(void* number_ptr, u32 bytes)
     u64 n = *(u64*)number_ptr;
     for (s32 i = bits - 1; i >= 0; i--)
     {
-        print("%d", (n & (1 << i)) >> i);
+        print("%d", (n & (u64)(1 << (u64)i)) >> (u64)i);
     }
     print("\n");
 }
 
-static inline bool test_buffer(ExecutionBuffer* eb, u8* test_case, u32 case_size, const char* str)
+static inline bool test_buffer(ExecutionBuffer* eb, u8* test_case, s64 case_size, const char* str)
 {
     bool success = true;
     for (u32 i = 0; i < case_size; i++)

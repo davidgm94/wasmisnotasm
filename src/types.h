@@ -1,5 +1,7 @@
 #pragma once
 
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -44,8 +46,8 @@ typedef float128_t f128;
 typedef struct SB
 {
     char* ptr;
-    u32 len; /* length */
-    u32 cap; /* capacity */
+    s64 len; /* length */
+    s64 cap; /* capacity */
 } SB, StringBuffer;
 
 #define GEN_BUFFER_STRUCT_PTR(type_name, type) \
