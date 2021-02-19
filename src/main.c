@@ -18,35 +18,22 @@ typedef s64 square_fn(s64);
 typedef s64 mul_fn(s64, s64);
 typedef s64 make_increment_s64(s64);
 
-/*** X86_64 ***/
-
-static const u8 IMUL_RAX_RDI[] = { 0x48, 0x0f, 0xaf, 0xc7 };
-static const u8 IMUL_RAX_RSI[] = { 0x48, 0x0f, 0xaf, 0xc6 };
-static const u8 MOV_RBP_RSP[] = { 0x48, 0x89, 0xe5 };
-
-typedef enum
+typedef enum OperandSize
 {
-    RAX_0x48 = 0x45,
-    RBX_0x48 = 0x5d,
-    RCX_0x48 = 0x4d,
-    RDX_0x48 = 0x55,
-    RSI_0x48 = 0x75,
-    RDI_0x48 = 0x7d,
-    RBP_0x48 = 0x6d,
-    RSP_0x48 = 0x65,
-} Register0x48;
+    OperandSize_Any = 0,
+    OperandSize_8 = 8,
+    OperandSize_16 = 16,
+    OperandSize_32 = 32,
+    OperandSize_64 = 64,
+} OperandSize;
 
 typedef enum OperandType
 {
     OperandType_None,
     OperandType_Register,
-    OperandType_Immediate8,
-    OperandType_Immediate16,
-    OperandType_Immediate32,
-    OperandType_Immediate64,
+    OperandType_Immediate,
     OperandType_MemoryIndirect,
     OperandType_RIP_Relative,
-    OperandType_Label32,
 } OperandType;
 
 typedef enum SIBScale
@@ -76,46 +63,45 @@ typedef enum REX
 
 typedef enum Register
 {
-    Register_rax = 0,
-    Register_rcx = 1,
-    Register_rdx = 2,
-    Register_rbx = 3,
-    Register_rsp = 4,
-    Register_rbp = 5,
-    Register_rsi = 6,
-    Register_rdi = 7,
+    Register_A = 0,
+    Register_C = 1,
+    Register_D = 2,
+    Register_B = 3,
+    Register_SP = 4,
+    Register_BP = 5,
+    Register_SI = 6,
+    Register_DI = 7,
 
-    Register_r8 =  8,
-    Register_r9 =  9,
-    Register_r10 = 10,
-    Register_r11 = 11,
-    Register_r12 = 12,
-    Register_r13 = 13,
-    Register_r14 = 14,
-    Register_r15 = 15,
+    Register_8 =  8,
+    Register_9 =  9,
+    Register_10 = 10,
+    Register_11 = 11,
+    Register_12 = 12,
+    Register_13 = 13,
+    Register_14 = 14,
+    Register_15 = 15,
 } Register;
-
 
 const char* register_to_string(Register r)
 {
     switch (r)
     {
-        CASE_TO_STR(Register_rax);
-        CASE_TO_STR(Register_rcx);
-        CASE_TO_STR(Register_rdx);
-        CASE_TO_STR(Register_rbx);
-        CASE_TO_STR(Register_rsp);
-        CASE_TO_STR(Register_rbp);
-        CASE_TO_STR(Register_rsi);
-        CASE_TO_STR(Register_rdi);
-        CASE_TO_STR(Register_r8);
-        CASE_TO_STR(Register_r9);
-        CASE_TO_STR(Register_r10);
-        CASE_TO_STR(Register_r11);
-        CASE_TO_STR(Register_r12);
-        CASE_TO_STR(Register_r13);
-        CASE_TO_STR(Register_r14);
-        CASE_TO_STR(Register_r15);
+        CASE_TO_STR(Register_A);
+        CASE_TO_STR(Register_C);
+        CASE_TO_STR(Register_D);
+        CASE_TO_STR(Register_B);
+        CASE_TO_STR(Register_SP);
+        CASE_TO_STR(Register_BP);
+        CASE_TO_STR(Register_SI);
+        CASE_TO_STR(Register_DI);
+        CASE_TO_STR(Register_8);
+        CASE_TO_STR(Register_9);
+        CASE_TO_STR(Register_10);
+        CASE_TO_STR(Register_11);
+        CASE_TO_STR(Register_12);
+        CASE_TO_STR(Register_13);
+        CASE_TO_STR(Register_14);
+        CASE_TO_STR(Register_15);
     default:
         return NULL;
     }
@@ -127,143 +113,189 @@ typedef struct OperandMemoryIndirect
     Register reg;
 } OperandMemoryIndirect;
 
+typedef union OperandImmediate
+{
+    u8  _8;
+    u16 _16;
+    u32 _32;
+    u64 _64;
+} OperandImmediate;
+
 typedef struct Operand
 {
     OperandType type;
+    OperandSize size;
     union
     {
         Register reg;
-        u8 imm8;
-        u16 imm16;
-        u32 imm32;
-        u64 imm64;
+        OperandImmediate imm;
         OperandMemoryIndirect mem_indirect;
     };
 } Operand;
 
-Operand no_operand = {0};
+#define reg_init(reg_index, reg_size) { .type = OperandType_Register, .size = reg_size, .reg = reg_index, }
+#define define_register(reg_name, reg_index, reg_size)\
+    const Operand reg_name = reg_init(reg_index, reg_size)
 
-#define reg_init(reg_name) { .type = OperandType_Register, .reg = Register_ ## reg_name, }
-#define define_register(reg_name)\
-    const Operand reg_name = reg_init(reg_name)
+/* 64-bit registers */
+define_register(rax,    Register_A, 64);
+define_register(rcx,    Register_C, 64);
+define_register(rdx,    Register_D, 64);
+define_register(rbx,    Register_C, 64);
+define_register(rsp,    Register_SP, 64);
+define_register(rbp,    Register_BP, 64);
+define_register(rsi,    Register_SI, 64);
+define_register(rdi,    Register_DI, 64);
+define_register(r8,     Register_8, 64);
+define_register(r9,     Register_9, 64);
+define_register(r10,    Register_10, 64);
+define_register(r11,    Register_11, 64);
+define_register(r12,    Register_12, 64);
+define_register(r13,    Register_13, 64);
+define_register(r14,    Register_14, 64);
+define_register(r15,    Register_15, 64);
 
-define_register(rax);
-define_register(rcx);
-define_register(rdx);
-define_register(rbx);
-define_register(rsp);
-define_register(rbp);
-define_register(rsi);
-define_register(rdi);
+/* 32-bit registers */
+define_register(eax,    Register_A, 32);
+define_register(ecx,    Register_C, 32);
+define_register(edx,    Register_D, 32);
+define_register(ebx,    Register_B, 32);
+define_register(esp,    Register_SP, 32);
+define_register(ebp,    Register_BP, 32);
+define_register(esi,    Register_SI, 32);
+define_register(edi,    Register_DI, 32);
+define_register(r8d,    Register_8,  32);
+define_register(r9d,    Register_9,  32);
+define_register(r10d,   Register_10, 32);
+define_register(r11d,   Register_11, 32);
+define_register(r12d,   Register_12, 32);
+define_register(r13d,   Register_13, 32);
+define_register(r14d,   Register_14, 32);
+define_register(r15d,   Register_15, 32);
 
-define_register(r8);
-define_register(r9);
-define_register(r10);
-define_register(r11);
-define_register(r12);
-define_register(r13);
-define_register(r14);
-define_register(r15);
+/* 16-bit registers */
+define_register(ax,     Register_A,  16);
+define_register(cx,     Register_C,  16);
+define_register(dx,     Register_D,  16);
+define_register(bx,     Register_C,  16);
+define_register(sp,     Register_SP, 16);
+define_register(bp,     Register_BP, 16);
+define_register(si,     Register_SI, 16);
+define_register(di,     Register_DI, 16);
+define_register(r8w,    Register_8,  16);
+define_register(r9w,    Register_9,  16);
+define_register(r10w,   Register_10, 16);
+define_register(r11w,   Register_11, 16);
+define_register(r12w,   Register_12, 16);
+define_register(r13w,   Register_13, 16);
+define_register(r14w,   Register_14, 16);
+define_register(r15w,   Register_15, 16);
+
+/* 8-bit registers */
+define_register(al,     Register_A,  8);
+define_register(cl,     Register_C,  8);
+define_register(dl,     Register_D,  8);
+define_register(bl,     Register_C,  8);
+define_register(spl,    Register_SP, 8);
+define_register(bpl,    Register_BP, 8);
+define_register(sil,    Register_SI, 8);
+define_register(dil,    Register_DI, 8);
+define_register(r8b,    Register_8,  8);
+define_register(r9b,    Register_9,  8);
+define_register(r10b,   Register_10, 8);
+define_register(r11b,   Register_11, 8);
+define_register(r12b,   Register_12, 8);
+define_register(r13b,   Register_13, 8);
+define_register(r14b,   Register_14, 8);
+define_register(r15b,   Register_15, 8);
 
 #ifdef MSVC_x86_64
-const Operand parameter_registers[] =
+const Register parameter_registers[] =
 {
-    reg_init(rcx),
-    reg_init(rdx),
-    reg_init(r8),
-    reg_init(r9),
+    Register_C,
+    Register_D,
+    Register_8,
+    Register_9,
 };
-const Operand return_registers[] =
+const Register return_registers[] =
 {
-    reg_init(rax),
+    Register_A,
 };
-const Operand scratch_registers[] =
+const Register scratch_registers[] =
 {
-    reg_init(rax),
-    reg_init(rcx),
-    reg_init(rdx),
-    reg_init(rax),
-    reg_init(r8),
-    reg_init(r9),
-    reg_init(r10),
-    reg_init(r11),
+    Register_A,
+    Register_C,
+    Register_D,
+    Register_8,
+    Register_9,
+    Register_10,
+    Register_11,
 };
-const Operand preserved_registers[] =
+const Register preserved_registers[] =
 {
-    reg_init(rbx),
-    reg_init(rdi),
-    reg_init(rsi),
-    reg_init(rsp),
-    reg_init(rbp),
-    reg_init(r12),
-    reg_init(r13),
-    reg_init(r14),
-    reg_init(r15),
+    Register_B,
+    Register_DI,
+    Register_SI,
+    Register_SP,
+    Register_BP,
+    Register_12,
+    Register_13,
+    Register_14,
+    Register_15,
 };
 #elif defined(SYSTEM_V_x86_64)
-const Operand parameter_registers[] =
+const Register parameter_registers[] =
 {
-    reg_init(rdi),
-    reg_init(rsi),
-    reg_init(rdx),
-    reg_init(rcx),
-    reg_init(r8),
-    reg_init(r9),
+    Register_DI,
+    Register_SI,
+    Register_D,
+    Register_C,
+    Register_8,
+    Register_9,
 };
-const Operand return_registers[] =
+const Register return_registers[] =
 {
-    reg_init(rax),
-    reg_init(rdx),
+    Register_A,
+    Register_D,
 };
-const Operand scratch_registers[] =
+const Register scratch_registers[] =
 {
-    reg_init(rax),
-    reg_init(rdi),
-    reg_init(rsi),
-    reg_init(rdx),
-    reg_init(rcx),
-    reg_init(r8),
-    reg_init(r9),
-    reg_init(r10),
-    reg_init(r11),
+    Register_A,
+    Register_DI,
+    Register_SI,
+    Register_D,
+    Register_C,
+    Register_8,
+    Register_9,
+    Register_10,
+    Register_11,
 };
-const Operand preserved_registers[] =
+const Register preserved_registers[] =
 {
-    reg_init(rbx),
-    reg_init(rsp),
-    reg_init(rbp),
-    reg_init(r12),
-    reg_init(r13),
-    reg_init(r14),
-    reg_init(r15),
+    Register_B,
+    Register_SP,
+    Register_BP,
+    Register_12,
+    Register_13,
+    Register_14,
+    Register_15,
 };
 #endif
 
+#define _imm(n, v) { .type = OperandType_Immediate, .imm._ ## n = v, .size = OperandSize_ ## n, }
 static inline Operand imm8(u8 value)
 {
-    return (const Operand)
-    {
-        .type = OperandType_Immediate8,
-        .imm8 = value,
-    };
+    return (const Operand)_imm(8, value);
 }
 
 static inline Operand imm32(u32 value)
 {
-    return (const Operand)
-    {
-        .type = OperandType_Immediate32,
-        .imm32 = value,
-    };
+    return (const Operand)_imm(32, value);
 }
 
 static inline Operand imm64(u64 value)
 {
-    return (const Operand)
-    {
-        .type = OperandType_Immediate64,
-        .imm64 = value,
-    };
+    return (const Operand)_imm(64, value);
 }
 
 static inline Operand stack(s32 offset)
@@ -291,19 +323,12 @@ typedef enum OperandEncodingType
 {
     OET_None = 0,
     OET_Register,
+    OET_Register_A,
     OET_Register_Or_Memory,
     OET_Memory,
     OET_Immediate,
 } OperandEncodingType;
 
-typedef enum OperandSize
-{
-    OperandSize_Any,
-    OperandSize_8,
-    OperandSize_16,
-    OperandSize_32,
-    OperandSize_64,
-} OperandSize;
 
 typedef struct OperandEncoding
 {
@@ -353,7 +378,7 @@ typedef struct Instruction
 
 const InstructionEncoding mov_encoding[] =
 {
-    // mov r/m64, r64
+    // mov rm64, r64
     {
         .op_code = 0x89,
         .extension = IET_Register,
@@ -363,7 +388,7 @@ const InstructionEncoding mov_encoding[] =
             [1] = {.type = OET_Register, .size = OperandSize_64,},
         },
     },
-    //mov_rm64_imm32_encoding
+    //mov rm64, imm32
     {
         .op_code = 0xc7,
         .extension = IET_Register,
@@ -373,6 +398,7 @@ const InstructionEncoding mov_encoding[] =
             [1] = {.type = OET_Immediate, .size = OperandSize_32,},
         },
     },
+    // mov r64, imm64
     {
         .op_code = 0xb8,
         .extension = IET_Register,
@@ -380,6 +406,26 @@ const InstructionEncoding mov_encoding[] =
         {
             [0] = {.type = OET_Register, .size = OperandSize_64,},
             [1] = {.type = OET_Immediate, .size = OperandSize_64,},
+        },
+    },
+    // mov r32, imm32
+    {
+        .op_code = 0xb8,
+        .extension = IET_Plus_Register,
+        .types =
+        {
+            [0] = {.type = OET_Register, .size = OperandSize_32,},
+            [1] = {.type = OET_Immediate, .size = OperandSize_32,},
+        },
+    },
+    // mov r8, imm8
+    {
+        .op_code = 0xb0,
+        .extension = IET_Plus_Register,
+        .types =
+        {
+            [0] = {.type = OET_Register, .size = OperandSize_8,},
+            [1] = {.type = OET_Immediate, .size = OperandSize_8,},
         },
     },
 };
@@ -400,12 +446,21 @@ const InstructionEncoding ret_encoding[] =
 const InstructionEncoding add_encoding[] =
 {
     {
+        .op_code = 0x05,
+        .extension = IET_Register,
+        .types = 
+        {
+            [0] = {.type = OET_Register_A, .size = OperandSize_32,},
+            [1] = {.type = OET_Immediate, .size = OperandSize_32,},
+        },
+    },
+    {
         .op_code = 0x03,
         .extension = IET_Register,
         .types =
         {
-            [0] = OET_Register,
-            [1] = OET_Register_Or_Memory,
+            [0] = {.type = OET_Register, .size = OperandSize_Any},
+            [1] = {.type = OET_Register_Or_Memory, .size = OperandSize_Any, },
         },
     },
     {
@@ -414,17 +469,18 @@ const InstructionEncoding add_encoding[] =
         .op_code_extension = 0,
         .types =
         {
-            [0] = OET_Register_Or_Memory,
-            [1] = OET_Immediate,
+            [0] = {.type = OET_Register_Or_Memory, .size = OperandSize_Any, },
+            [1] = {.type = OET_Immediate, .size = OperandSize_8, },
         },
     },
     {
-        .op_code = 0x05,
+        .op_code = 0x81,
         .extension = IET_Register,
-        .types = 
+        .op_code_extension = 0,
+        .types =
         {
-            [0] = OET_Register,
-            [1] = OET_Immediate,
+            [0] = {.type = OET_Register_Or_Memory, .size = OperandSize_Any, },
+            [1] = {.type = OET_Immediate, .size = OperandSize_32, },
         },
     },
 };
@@ -491,33 +547,31 @@ static void encode(ExecutionBuffer* eb, Instruction instruction)
         {
             OperandEncodingType encoding_type = encoding.types[j].type;
             OperandSize encoding_size = encoding.types[j].size;
-            OperandType operand_type = instruction.operands[j].type;
+            Operand operand = instruction.operands[j];
+            OperandType operand_type = operand.type;
+            OperandSize operand_size = operand.size;
 
             if (operand_type == OperandType_None && encoding_type == OET_None)
             {
                 continue;
             }
-            if (operand_type == OperandType_Register && encoding_type == OET_Register)
+            if (operand_type == OperandType_Register && encoding_type == OET_Register_A && operand.reg == Register_A && (encoding_size == operand_size || encoding_size == OperandSize_Any))
             {
                 continue;
             }
-            if (operand_type == OperandType_Register && encoding_type == OET_Register_Or_Memory)
+            if (operand_type == OperandType_Register && encoding_type == OET_Register && (encoding_size == operand_size || encoding_size == OperandSize_Any))
+            {
+                continue;
+            }
+            if (operand_type == OperandType_Register && encoding_type == OET_Register_Or_Memory && (encoding_size == operand_size || encoding_size == OperandSize_Any))
+            {
+                continue;
+            }
+            if (operand_type == OperandType_Immediate && encoding_type == OET_Immediate && (encoding_size == operand_size || encoding_size == OperandSize_Any))
             {
                 continue;
             }
             if (operand_type == OperandType_MemoryIndirect && encoding_type == OET_Register_Or_Memory)
-            {
-                continue;
-            }
-            if (operand_type == OperandType_Immediate64 && encoding_type == OET_Immediate && encoding_size == OperandSize_64)
-            {
-                continue;
-            }
-            if (operand_type == OperandType_Immediate32 && encoding_type == OET_Immediate && encoding_size == OperandSize_32)
-            {
-                continue;
-            }
-            if (operand_type == OperandType_Immediate8 && encoding_type == OET_Immediate && encoding_size == OperandSize_8)
             {
                 continue;
             }
@@ -543,7 +597,7 @@ static void encode(ExecutionBuffer* eb, Instruction instruction)
             Operand operand = instruction.operands[j];
             OperandEncodingType encoding_type = encoding.types[j].type;
 
-            if (operand.type == OperandType_Register && encoding.extension != IET_Plus_Register)
+            if (operand.type == OperandType_Register && encoding.extension != IET_Plus_Register && operand.size == OperandSize_64)
             {
                 // TODO: add only if 64 bit
                 rex_byte |= RexW;
@@ -611,21 +665,17 @@ static void encode(ExecutionBuffer* eb, Instruction instruction)
             u8 mod_rm = (
                 (mod << 6) |
                 (register_or_op_code << 3) | 
-                (r_m)
-            );
-            // print("Mod register: 0x%02X, register_or_op_code: 0x%02X, r_m: 0x%02X. Appending: 0x%02X\n", Mod_Register, register_or_op_code, r_m, mod_rm);
-            // print("Result: ");
-            // print_binary(&mod_rm, 1);
-            // u8 mod_rm_expected = 0x7D;
-            // print("Expected: ");
-            // print_binary(&mod_rm_expected, 1);
-            // print("Expected: 0x%02X, result: 0x%02X\n", mod_rm_expected, mod_rm);
-            
-            // TODO: This hack was working before the crash
-            //if (encoding.op_code == mov_rm64_r64_encoding[0].op_code)
-            //{
-                //mod_rm = 0x7D;
-            //}
+				(r_m)
+				);
+			print("Mod register: 0x%02X, register_or_op_code: 0x%02X, r_m: 0x%02X. Appending: 0x%02X\n", Mod_Register, register_or_op_code, r_m, mod_rm);
+			print("Result: ");
+			print_binary(&mod_rm, 1);
+			u8 mod_rm_expected = 0xc3;
+			print("Expected: ");
+			print_binary(&mod_rm_expected, 1);
+			print("Expected: 0x%02X, result: 0x%02X\n", mod_rm_expected, mod_rm);
+
+			//TODO: This hack was working before the crash
             u8_append(eb, mod_rm);
         }
 
@@ -651,23 +701,29 @@ static void encode(ExecutionBuffer* eb, Instruction instruction)
         for (u32 j = 0; j < 2; j++)
         {
             Operand operand = instruction.operands[j];
-            switch (operand.type)
-            {
-                case (OperandType_Immediate64):
-                    u64_append(eb, operand.imm64);
-                    break;
-                case (OperandType_Immediate32):
-                    //print("Buffer len: %u\n", eb->len);
-                    u32_append(eb, operand.imm32);
-                    break;
-                case (OperandType_Immediate8):
-                    u8_append(eb, operand.imm8);
+			switch (operand.type)
+			{
+				case OperandType_Immediate:
+					switch (operand.size)
+					{
+						case (OperandSize_64):
+							u64_append(eb, operand.imm._64);
+							break;
+						case (OperandSize_32):
+							u32_append(eb, operand.imm._32);
+							break;
+						case (OperandSize_8):
+							u8_append(eb, operand.imm._8);
+							break;
+						default:
+							break;
+					}
                     break;
                 default:
                     break;
-            }
-        }
-    }
+			}
+		}
+	}
 }
 
 typedef struct Function
@@ -717,63 +773,6 @@ static inline void fn_return(Function* fn, Operand to_return)
     encode(&fn->eb, ret);
 }
 
-Function foo(void)
-{
-    Function fn = fn_begin();
-    Operand x = declare_variable(&fn);
-    Operand temp = imm32(1);
-    assign(&fn, x, temp);
-    mutating_plus(&fn, rcx, x);
-    fn_return(&fn, rcx);
-
-    return fn;
-}
-
-static inline void push_rbp(ExecutionBuffer* eb)
-{
-    static const u8 PUSH_RBP = 0x55;
-    u8_append(eb, PUSH_RBP);
-}
-
-static inline void pop_rbp(ExecutionBuffer* eb)
-{
-    static const u8 POP_RBP = 0x5d;
-    u8_append(eb, POP_RBP);
-}
-
-static inline void mov_rbp8_rdi(ExecutionBuffer* eb)
-{
-    u8_append(eb, 0x48);
-    u8_append(eb, 0x89);
-    u8_append(eb, 0x7d);
-    u8_append(eb, 0xf8);
-}
-
-static inline void mov_reg_0x48_rbp16(ExecutionBuffer* eb, Register0x48 reg)
-{
-    u8_append(eb, 0x48);
-    u8_append(eb, 0x8B);
-    u8_append(eb, reg);
-    u8_append(eb, 0xf0);
-}
-
-static inline void add_reg_0x48_rbp8(ExecutionBuffer* eb, Register0x48 reg)
-{
-    u8_append(eb, 0x48);
-    u8_append(eb, 0x03);
-    u8_append(eb, reg);
-    u8_append(eb, 0xf8);
-}
-
-static inline void mov_rbp16_imm32(ExecutionBuffer* eb, s32 value)
-{
-    u8_append(eb, 0x48);
-    u8_append(eb, 0xc7);
-    u8_append(eb, 0x45);
-    u8_append(eb, 0xf0);
-    s32_append(eb, value);
-}
-
 #define TEST_EQUAL_S64(result, expected)\
 {\
     if (result == expected)\
@@ -793,35 +792,6 @@ static inline void mov_rbp16_imm32(ExecutionBuffer* eb, s32 value)
     }\
 }
 
-static void test_mul_s64(s64 a, s64 b)
-{
-    ExecutionBuffer eb = give_me(1024);
-    encode(&eb, (Instruction) { mov, {rax, rdi}});
-
-    array_append(&eb, IMUL_RAX_RSI);
-    encode(&eb, ret);
-
-    mul_fn* fn = (mul_fn*)eb.ptr;
-    s64 result = fn(a, b);
-    s64 expected = a * b;
-
-    TEST_EQUAL_S64(result, expected);
-}
-
-static void test_square_s64(s64 n)
-{
-    ExecutionBuffer eb = give_me(1024);
-
-    encode(&eb, (Instruction) { mov, {rax, rdi} });
-    array_append(&eb, IMUL_RAX_RDI);
-    encode(&eb, ret);
-
-    square_fn* fn = (square_fn*)eb.ptr;
-    s64 result = fn(n);
-    s64 expected = n * n;
-
-    TEST_EQUAL_S64(result, expected);
-}
 static inline ExecutionBuffer make_eb_increment(void)
 {
     ExecutionBuffer eb = give_me(1024);
@@ -853,27 +823,6 @@ static make_increment_s64* make_increment_s64_fn(void)
 
     make_increment_s64* fn = (make_increment_s64*)eb.ptr;
     return fn;
-}
-
-static void test_increment_s64_slow(s64 n)
-{
-    ExecutionBuffer eb = give_me(1024);
-
-    push_rbp(&eb);
-    array_append(&eb, MOV_RBP_RSP);
-    encode(&eb, (Instruction) { mov, rax, rdi });
-    mov_rbp8_rdi(&eb);
-    mov_rbp16_imm32(&eb, 0x1);
-    mov_reg_0x48_rbp16(&eb, RAX_0x48);
-    add_reg_0x48_rbp8(&eb, RAX_0x48);
-    pop_rbp(&eb);
-    encode(&eb, ret);
-
-    make_increment_s64* fn = (make_increment_s64*)eb.ptr;
-    s64 result = fn(n);
-    s64 expected = n + 1;
-
-    TEST_EQUAL_S64(result, expected);
 }
 
 static void test_add_rax_imm32(s32 n)
@@ -917,7 +866,7 @@ static void test_mov_rax_rdi(void* s)
     test_buffer(&eb, expected_eb.ptr, expected_eb.len, __func__);
 }
 
-static void test_mov_reg_imm64(void* s)
+static void test_mov_r64_imm64(void* s)
 {
     u64 test_number = 12312541231;
     ExecutionBuffer eb = give_me(1024);
@@ -955,6 +904,70 @@ static void test_pop_r64(void* s)
     test_buffer(&eb, expected.ptr, expected.len, __func__);
 }
 
+static void test_mov_r32_imm32(void* s)
+{
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {
+        mov, { ebx, imm32(0xffffffff) },
+    });
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0xbb);
+    u8_append(&expected, 0xff);
+    u8_append(&expected, 0xff);
+    u8_append(&expected, 0xff);
+    u8_append(&expected, 0xff);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+
+static void test_add_r64_imm8(void* s)
+{
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {
+        add, { rax, imm8(0x8) },
+    });
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x48);
+    u8_append(&expected, 0x83);
+    u8_append(&expected, 0xc0);
+    u8_append(&expected, 0x08);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+static void test_add_r32_imm8(void* s)
+{
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {
+        add, { eax, imm8(0x8) },
+    });
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x83);
+    u8_append(&expected, 0xc0);
+    u8_append(&expected, 0x08);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+
+static void test_add_r64_imm32(void* s)
+{
+    u32 number = 0xfffff;
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {
+        add, { rbx, imm32(number) },
+    });
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x48);
+    u8_append(&expected, 0x81);
+    u8_append(&expected, 0xc3);
+    u32_append(&expected, number);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+
 typedef void TestFn(void*);
 typedef struct Test
 {
@@ -964,8 +977,7 @@ typedef struct Test
 
 Test tests[] =
 {
-    {test_push_r64},
-    {test_pop_r64},
+    {test_add_r64_imm32}
 };
 
 s32 main(s32 argc, char* argv[])
