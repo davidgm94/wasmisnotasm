@@ -403,7 +403,6 @@ typedef struct Instruction
 #define OPTS(...) __VA_ARGS__
 #define NO_OPTS .rex_byte = 0
 #define OPS(...) .operands = { __VA_ARGS__ }
-#define NO_OPS {0}
 #define OP_COMB(_ops, _opts) { _ops, _opts }
 #define ENC_OPTS(...) .options = { __VA_ARGS__ }
 #define ENCODING(_op_code, options, ...) { .op_code = _op_code, options, .operand_combinations = { __VA_ARGS__ }, }
@@ -411,7 +410,7 @@ typedef struct Instruction
 const InstructionEncoding adc_encoding[] =
 {
     ENCODING(0x14,ENC_OPTS(0),
-        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8)))
+        OP_COMB(OPTS(0),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8)))
         ),
     ENCODING(0x15, ENC_OPTS(0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
@@ -455,7 +454,8 @@ const InstructionEncoding adc_encoding[] =
 
 // @TODO:
 const InstructionEncoding adcx_encoding[] = {0};
-const InstructionEncoding add_encoding[] = {
+const InstructionEncoding add_encoding[] =
+{
     ENCODING(0x04,ENC_OPTS(0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8))),
     ),
@@ -498,26 +498,259 @@ const InstructionEncoding add_encoding[] = {
     ),
 };
 
-const InstructionEncoding adox_encoding[] =
-{
-    0
-};
-
-const InstructionEncoding and_encoding[] =
-{
-    0
-};
+const InstructionEncoding adox_encoding[] = { 0 };
+const InstructionEncoding and_encoding[] = { 0 };
+const InstructionEncoding andn_encoding[] = { 0 };
+const InstructionEncoding bextr_encoding[] = { 0 };
+const InstructionEncoding blsi_encoding[] = { 0 };
+const InstructionEncoding blsmsk_encoding[] = { 0 };
+const InstructionEncoding blsr_encoding[] = { 0 };
+const InstructionEncoding bndcl_encoding[] = { 0 };
+const InstructionEncoding bndcu_encoding[] = { 0 };
+const InstructionEncoding bndcn_encoding[] = { 0 };
+const InstructionEncoding bndldx_encoding[] = { 0 };
+const InstructionEncoding bndmk_encoding[] = { 0 };
+const InstructionEncoding bndmov_encoding[] = { 0 };
+const InstructionEncoding bndstx_encoding[] = { 0 };
+const InstructionEncoding bsf_encoding[] = { 0 };
+const InstructionEncoding bsr_encoding[] = { 0 };
+const InstructionEncoding bswap_encoding[] = { 0 };
+const InstructionEncoding bt_encoding[] = { 0 };
+const InstructionEncoding btc_encoding[] = { 0 };
+const InstructionEncoding btr_encoding[] = { 0 };
+const InstructionEncoding bts_encoding[] = { 0 };
+const InstructionEncoding bzhi_encoding[] = { 0 };
+const InstructionEncoding call_encoding[] = { 0 };
+const InstructionEncoding cbw_encoding[] = { 0 };
+const InstructionEncoding cwde_encoding[] = { 0 };
+const InstructionEncoding cdqe_encoding[] = { 0 };
+const InstructionEncoding clac_encoding[] = { 0 };
+const InstructionEncoding clc_encoding[] = { 0 };
+const InstructionEncoding cld_encoding[] = { 0 };
+const InstructionEncoding cldemote_encoding[] = { 0 };
+const InstructionEncoding clflush_encoding[] = { 0 };
+const InstructionEncoding clflushopt_encoding[] = { 0 };
+const InstructionEncoding cli_encoding[] = { 0 };
+const InstructionEncoding clrssbsy_encoding[] = { 0 };
+const InstructionEncoding clts_encoding[] = { 0 };
+const InstructionEncoding clwb_encoding[] = { 0 };
+const InstructionEncoding cmc_encoding[] = { 0 };
+const InstructionEncoding cmov_encoding[] = { 0 };
+const InstructionEncoding cmp_encoding[] = { 0 };
+const InstructionEncoding cmpxchg_encoding[] = { 0 };
+const InstructionEncoding cmpxchg8b_encoding[] = { 0 };
+const InstructionEncoding cmpxchg16b_encoding[] = { 0 };
+const InstructionEncoding cpuid_encoding[] = { 0 };
+const InstructionEncoding crc32_encoding[] = { 0 };
+const InstructionEncoding cwd_encoding[] = { 0 };
+const InstructionEncoding cdq_encoding[] = { 0 };
+const InstructionEncoding cqo_encoding[] = { 0 };
+const InstructionEncoding dec_encoding[] = { 0 };
+const InstructionEncoding div_encoding[] = { 0 };
+const InstructionEncoding endbr32_encoding[] = { 0 };
+const InstructionEncoding endbr64_encoding[] = { 0 };
+const InstructionEncoding enter_encoding[] = { 0 };
+// Tons of float instructions here
+const InstructionEncoding hlt_encoding[] = { 0 };
+const InstructionEncoding idiv_encoding[] = { 0 };
+const InstructionEncoding imul_encoding[] = { 0 };
+const InstructionEncoding in_encoding[] = { 0 };
+const InstructionEncoding inc_encoding[] = { 0 };
+const InstructionEncoding incssp_encoding[] = { 0 };
+const InstructionEncoding ins_encoding[] = { 0 };
+const InstructionEncoding int_encoding[] = { 0 };
+const InstructionEncoding invd_encoding[] = { 0 };
+const InstructionEncoding invlpg_encoding[] = { 0 };
+const InstructionEncoding invpcid_encoding[] = { 0 };
+const InstructionEncoding iret_encoding[] = { 0 };
+const InstructionEncoding jcc_encoding[] = { 0 };
+const InstructionEncoding jmp_encoding[] = { 0 };
+const InstructionEncoding lar_encoding[] = { 0 };
+const InstructionEncoding lds_encoding[] = { 0 };
+const InstructionEncoding lss_encoding[] = { 0 };
+const InstructionEncoding les_encoding[] = { 0 };
+const InstructionEncoding lfs_encoding[] = { 0 };
+const InstructionEncoding lgs_encoding[] = { 0 };
+const InstructionEncoding lea_encoding[] = { 0 };
+const InstructionEncoding leave_encoding[] = { 0 };
+const InstructionEncoding lfence_encoding[] = { 0 };
+const InstructionEncoding lgdt_encoding[] = { 0 };
+const InstructionEncoding lidt_encoding[] = { 0 };
+const InstructionEncoding lldt_encoding[] = { 0 };
+const InstructionEncoding lmsw_encoding[] = { 0 };
+const InstructionEncoding lock_encoding[] = { 0 };
+const InstructionEncoding lods_encoding[] = { 0 };
+const InstructionEncoding lodsb_encoding[] = { 0 };
+const InstructionEncoding lodsw_encoding[] = { 0 };
+const InstructionEncoding lodsd_encoding[] = { 0 };
+const InstructionEncoding lodsq_encoding[] = { 0 };
+const InstructionEncoding loop_encoding[] = { 0 };
+const InstructionEncoding loope_encoding[] = { 0 };
+const InstructionEncoding loopne_encoding[] = { 0 };
+const InstructionEncoding lsl_encoding[] = { 0 };
+const InstructionEncoding ltr_encoding[] = { 0 };
+const InstructionEncoding lzcnt_encoding[] = { 0 };
+const InstructionEncoding mfence_encoding[] = { 0 };
 
 const InstructionEncoding mov_encoding[] =
 {
-    0
+    ENCODING(0x88, ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+    ),
+    ENCODING(0x89, ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
+    ),
+    ENCODING(0x8A, ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(0x8B, ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
+    ),
+    /*  @TODO: NOT CODED SEGMENT AND OFFSET INSTRUCTIONS */
+    ENCODING(0xB0, ENC_OPTS(.type = OpCodePlusReg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 8), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register, 8), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(0xB8, ENC_OPTS(.type = OpCodePlusReg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32), OP(OET_Immediate, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Immediate, 64))),
+    ),
+    ENCODING(0xC6, ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(0xC7, ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
+    ),
 };
+
+const InstructionEncoding movcr_encoding[] = { 0 };
+const InstructionEncoding movdbg_encoding[] = { 0 };
+const InstructionEncoding movbe_encoding[] = { 0 };
+const InstructionEncoding movdq_encoding[] = { 0 };
+const InstructionEncoding movdiri_encoding[] = { 0 };
+const InstructionEncoding movdir64b_encoding[] = { 0 };
+const InstructionEncoding movq_encoding[] = { 0 };
+const InstructionEncoding movs_encoding[] = { 0 };
+const InstructionEncoding movsx_encoding[] = { 0 };
+const InstructionEncoding movzx_encoding[] = { 0 };
+const InstructionEncoding mul_encoding[] = { 0 };
+const InstructionEncoding mulx_encoding[] = { 0 };
+const InstructionEncoding mwait_encoding[] = { 0 };
+const InstructionEncoding neg_encoding[] = { 0 };
+const InstructionEncoding nop_encoding[] = { 0 };
+const InstructionEncoding not_encoding[] = { 0 };
+const InstructionEncoding or_encoding[] = { 0 };
+const InstructionEncoding out_encoding[] = { 0 };
+const InstructionEncoding outs_encoding[] = { 0 };
+const InstructionEncoding pause_encoding[] = { 0 };
+const InstructionEncoding pdep_encoding[] = { 0 };
+const InstructionEncoding pext_encoding[] = { 0 };
+const InstructionEncoding pop_encoding[] = { 0 };
+const InstructionEncoding popcnt_encoding[] = { 0 };
+const InstructionEncoding popf_encoding[] = { 0 };
+const InstructionEncoding por_encoding[] = { 0 };
+const InstructionEncoding prefetch_encoding[] = { 0 };
+const InstructionEncoding prefetchw_encoding[] = { 0 };
+const InstructionEncoding ptwrite_encoding[] = { 0 };
+const InstructionEncoding push_encoding[] = { 0 };
+const InstructionEncoding pushf_encoding[] = { 0 };
+const InstructionEncoding rotate_encoding[] = { 0 };
+const InstructionEncoding rdfsbase_encoding[] = { 0 };
+const InstructionEncoding rdgsbase_encoding[] = { 0 };
+const InstructionEncoding rdmsr_encoding[] = { 0 };
+const InstructionEncoding rdpid_encoding[] = { 0 };
+const InstructionEncoding rdpmc_encoding[] = { 0 };
+const InstructionEncoding rdrand_encoding[] = { 0 };
+const InstructionEncoding rdseed_encoding[] = { 0 };
+const InstructionEncoding rdssp_encoding[] = { 0 };
+const InstructionEncoding rdtsc_encoding[] = { 0 };
+const InstructionEncoding rdtscp_encoding[] = { 0 };
+const InstructionEncoding rep_encoding[] = { 0 };
+const InstructionEncoding ret_encoding[] = { 0 };
+const InstructionEncoding rsm_encoding[] = { 0 };
+const InstructionEncoding rstorssp_encoding[] = { 0 };
+const InstructionEncoding sahf_encoding[] = { 0 };
+const InstructionEncoding sal_encoding[] = { 0 };
+const InstructionEncoding sar_encoding[] = { 0 };
+const InstructionEncoding shl_encoding[] = { 0 };
+const InstructionEncoding shr_encoding[] = { 0 };
+const InstructionEncoding sarx_encoding[] = { 0 };
+const InstructionEncoding shlx_encoding[] = { 0 };
+const InstructionEncoding shrx_encoding[] = { 0 };
+const InstructionEncoding saveprevssp_encoding[] = { 0 };
+const InstructionEncoding sbb_encoding[] = { 0 };
+const InstructionEncoding scas_encoding[] = { 0 };
+const InstructionEncoding setcc_encoding[] = { 0 };
+const InstructionEncoding setssbsy_encoding[] = { 0 };
+const InstructionEncoding sfence_encoding[] = { 0 };
+const InstructionEncoding sgdt_encoding[] = { 0 };
+const InstructionEncoding shld_encoding[] = { 0 };
+const InstructionEncoding shrd_encoding[] = { 0 };
+const InstructionEncoding sidt_encoding[] = { 0 };
+const InstructionEncoding sldt_encoding[] = { 0 };
+const InstructionEncoding smsw_encoding[] = { 0 };
+const InstructionEncoding stac_encoding[] = { 0 };
+const InstructionEncoding stc_encoding[] = { 0 };
+const InstructionEncoding std_encoding[] = { 0 };
+const InstructionEncoding sti_encoding[] = { 0 };
+const InstructionEncoding stos_encoding[] = { 0 };
+const InstructionEncoding str_encoding[] = { 0 };
+const InstructionEncoding sub_encoding[] = { 0 };
+const InstructionEncoding swapgs_encoding[] = { 0 };
+const InstructionEncoding syscall_encoding[] = { 0 };
+const InstructionEncoding sysenter_encoding[] = { 0 };
+const InstructionEncoding sysexit_encoding[] = { 0 };
+const InstructionEncoding sysret_encoding[] = { 0 };
+const InstructionEncoding test_encoding[] = { 0 };
+const InstructionEncoding tpause_encoding[] = { 0 };
+const InstructionEncoding tzcnt_encoding[] = { 0 };
+const InstructionEncoding ud_encoding[] = { 0 };
+const InstructionEncoding umonitor_encoding[] = { 0 };
+const InstructionEncoding umwait_encoding[] = { 0 };
+const InstructionEncoding wait_encoding[] = { 0 };
+const InstructionEncoding wbinvd_encoding[] = { 0 };
+const InstructionEncoding wbnoinvd_encoding[] = { 0 };
+const InstructionEncoding wrfsbase_encoding[] = { 0 };
+const InstructionEncoding wrgsbase_encoding[] = { 0 };
+const InstructionEncoding wrmsr_encoding[] = { 0 };
+const InstructionEncoding wrss_encoding[] = { 0 };
+const InstructionEncoding wruss_encoding[] = { 0 };
+const InstructionEncoding xacquire_encoding[] = { 0 };
+const InstructionEncoding xrelease_encoding[] = { 0 };
+const InstructionEncoding xabort_encoding[] = { 0 };
+const InstructionEncoding xadd_encoding[] = { 0 };
+const InstructionEncoding xbegin_encoding[] = { 0 };
+const InstructionEncoding xchg_encoding[] = { 0 };
+const InstructionEncoding xend_encoding[] = { 0 };
+const InstructionEncoding xgetbv_encoding[] = { 0 };
+const InstructionEncoding xlat_encoding[] = { 0 };
+const InstructionEncoding xor_encoding[] = { 0 };
+const InstructionEncoding xrstor_encoding[] = { 0 };
+const InstructionEncoding xrstors_encoding[] = { 0 };
+const InstructionEncoding xsave_encoding[] = { 0 };
+const InstructionEncoding xsavec_encoding[] = { 0 };
+const InstructionEncoding xsaveopt_encoding[] = { 0 };
+const InstructionEncoding xsaves_encoding[] = { 0 };
+const InstructionEncoding xsetbv_encoding[] = { 0 };
+const InstructionEncoding xtest_encoding[] = { 0 };
+
 
 #define define_mnemonic(instruction)\
     const Mnemonic instruction = { .encodings = (const InstructionEncoding*) instruction ## _encoding, .encoding_count = array_length(instruction ## _encoding), }
 
 define_mnemonic(adc);
 define_mnemonic(add);
+define_mnemonic(mov);
 
 bool find_encoding(ExecutionBuffer* eb, Instruction instruction, u32* encoding_index, u32* combination_index)
 {
@@ -607,22 +840,6 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     OperandCombination combination = encoding.operand_combinations[combination_index];
     u32 operand_count = array_length(combination.operands);
 
-    u8 reg_code = 0;
-
-    for (u32 operand_i = 0; operand_i < operand_count; operand_i++)
-    {
-        OperandEncoding op_encoding = combination.operands[operand_i];
-        Operand operand = instruction.operands[operand_i];
-        if (op_encoding.type == OET_None)
-        {
-            break;
-        }
-
-        if (operand.type == OperandType_Register)
-        {
-            reg_code = operand.reg;
-        }
-    }
 
     if (combination.rex_byte)
     {
@@ -631,8 +848,11 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
 
 
     u8 op_code = encoding.op_code;
+    bool d = op_code & 0b10;
+    bool s = op_code & 0b1;
     if (encoding.options.type == OpCodePlusReg)
     {
+        u8 reg_code = instruction.operands[0].reg;
         op_code = (op_code & 0b11111000) | (reg_code & 0b111);
     }
 
@@ -644,21 +864,27 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     bool need_mod_rm = is_digit || is_reg;
     if (need_mod_rm)
     {
+        bool first_op_reg = instruction.operands[0].type == OperandType_Register;
         u8 register_or_digit;
+
         if (is_digit)
         {
             register_or_digit = encoding.options.digit;
         }
         else
         {
-            register_or_digit = reg_code;
+            redassert(instruction.operands[2].type == OperandType_None);
+            // Pick the register index from the last register in the operands
+            bool second_op_reg = instruction.operands[1].type == OperandType_Register;
+            register_or_digit = instruction.operands[second_op_reg].reg;
         }
+
         u8 r_m = 0;
         u8 mod = 0;
-        if (instruction.operands[0].type == OperandType_Register)
+        if (first_op_reg)
         {
             mod = Mod_Register;
-            r_m = reg_code;
+            r_m = instruction.operands[0].reg;
         }
         else
         {
@@ -1080,14 +1306,34 @@ static void _fn_name(void* unused)\
     test_buffer(&eb, expected.ptr, expected.len, __func__);\
 }
 
-define_test_fn(test_add_al_imm8,    8,  define_instr(add, { al, imm8(test_n) }), define_expected(0x04, UINT8_MAX))
-define_test_fn(test_add_ax_imm16,   16, define_instr(add, { ax, imm16(test_n) }), define_expected(0x05, 0xff, 0xff))
-define_test_fn(test_add_eax_imm32,  32, define_instr(add, { eax, imm32(test_n) }), define_expected(0x05, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(test_add_rax_imm32,  32, define_instr(add, { rax, imm32(test_n) }), define_expected(0x48, 0x05, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(test_add_rm8_imm8,   8,  define_instr(add, { bl, imm8(test_n) }), define_expected(0x80, 0xc3, 0xff))
+/* ADD */
+define_test_fn(test_add_al_imm8, 8, define_instr(add, { al, imm8(test_n) }), define_expected(0x04, UINT8_MAX))
+define_test_fn(test_add_ax_imm16, 16, define_instr(add, { ax, imm16(test_n) }), define_expected(0x05, 0xff, 0xff))
+define_test_fn(test_add_eax_imm32, 32, define_instr(add, { eax, imm32(test_n) }), define_expected(0x05, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_add_rax_imm32, 32, define_instr(add, { rax, imm32(test_n) }), define_expected(0x48, 0x05, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_add_rm8_imm8, 8, define_instr(add, { bl, imm8(test_n) }), define_expected(0x80, 0xc3, 0xff))
 define_test_fn(test_add_rm16_imm16, 16, define_instr(add, { bx, imm16(test_n) }), define_expected(0x66, 0x81, 0xc3, 0xff, 0xff))
 define_test_fn(test_add_rm32_imm32, 32, define_instr(add, { ebx, imm32(test_n) }), define_expected(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
 define_test_fn(test_add_rm64_imm32, 32, define_instr(add, { rbx, imm32(test_n) }), define_expected(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
+
+/* MOV */
+
+define_test_fn(test_mov_bl_cl, 8, define_instr(mov, { bl, cl }), define_expected(0x88, 0xcb))
+define_test_fn(test_mov_bx_cx, 16, define_instr(mov, { bx, cx }), define_expected(0x66, 0x89, 0xcb))
+define_test_fn(test_mov_ebx_ecx, 32, define_instr(mov, { ebx, ecx }), define_expected(0x89, 0xcb))
+define_test_fn(test_mov_rbx_rcx, 64, define_instr(mov, { rbx, rcx }), define_expected(0x48, 0x89, 0xcb))
+
+define_test_fn(test_mov_al_imm8, 8, define_instr(mov, { al, imm8(test_n) }), define_expected(0xb0, UINT8_MAX))
+define_test_fn(test_mov_ax_imm16, 16, define_instr(mov, { ax, imm16(test_n) }), define_expected(0x66, 0xb8, 0xff, 0xff))
+define_test_fn(test_mov_eax_imm32, 32, define_instr(mov, { eax, imm32(test_n) }), define_expected(0xb8, 0xff, 0xff))
+define_test_fn(test_mov_rax_imm32, 32, define_instr(mov, { rax, imm32(test_n) }), define_expected(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_mov_rax_imm64, 64, define_instr(mov, { rax, imm64(test_n) }), define_expected(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_mov_r8_imm8,   8,  define_instr(mov, { bl, imm8(test_n) }), define_expected(0xb3, 0xff))
+define_test_fn(test_mov_r16_imm16, 16, define_instr(mov, { bx, imm16(test_n) }), define_expected(0x66, 0xbb, 0xff, 0xff))
+define_test_fn(test_mov_r32_imm32, 32, define_instr(mov, { ebx, imm32(test_n) }), define_expected(0xbb, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_mov_r64_imm64, 64, define_instr(mov, { rbx, imm64(test_n) }), define_expected(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_mov_rm64_imm32, 32, define_instr(mov, { rbx, imm32(test_n) }), define_expected(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff))
+
 
 typedef void TestFn(void*);
 typedef struct Test
@@ -1098,13 +1344,20 @@ typedef struct Test
 
 Test tests[] =
 {
-    { test_add_al_imm8},
-    { test_add_ax_imm16},
-    { test_add_eax_imm32},
-    { test_add_rax_imm32},
-    { test_add_rm8_imm8},
-    { test_add_rm32_imm32},
-    { test_add_rm64_imm32},
+    { test_mov_bl_cl},
+    { test_mov_bx_cx}, 
+    { test_mov_ebx_ecx},
+    { test_mov_rbx_rcx},
+    { test_mov_al_imm8},
+    { test_mov_ax_imm16},
+    { test_mov_eax_imm32},
+    { test_mov_rax_imm32},
+    { test_mov_rax_imm64},
+    { test_mov_r8_imm8},
+    { test_mov_r16_imm16,},
+    { test_mov_r32_imm32},
+    { test_mov_r64_imm64,},
+    { test_mov_rm64_imm32},
 };
 
 s32 main(s32 argc, char* argv[])
