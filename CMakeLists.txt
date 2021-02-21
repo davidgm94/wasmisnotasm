@@ -7,4 +7,3 @@ set(WASM_NOT_ASM_SRC
     src/os.c
 )
 add_executable(wasmnotasm ${WASM_NOT_ASM_SRC})
-

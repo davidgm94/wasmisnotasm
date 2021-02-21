@@ -33,6 +33,7 @@ typedef enum OperandType
     OperandType_Register,
     OperandType_Immediate,
     OperandType_MemoryIndirect,
+    OperandType_MemoryDirect,
     OperandType_RIP_Relative,
 } OperandType;
 
@@ -47,18 +48,18 @@ typedef enum SIBScale
 typedef enum Mod
 {
     Mod_Displacement_0 = 0b00,
-    Mod_Displacement_s8 = 0b01,
-    Mod_Displacement_s32 = 0b10,
+    Mod_Displacement_8 = 0b01,
+    Mod_Displacement_32 = 0b10,
     Mod_Register = 0b11,
 } Mod;
 
 typedef enum REX
 {
     Rex  = 0x40,
-    RexW = 0x48,
-    RexR = 0x44,
-    RexX = 0x42,
     RexB = 0x41,
+    RexX = 0x42,
+    RexR = 0x44,
+    RexW = 0x48,
 } REX;
 
 typedef enum Register
@@ -71,6 +72,10 @@ typedef enum Register
     Register_BP = 5,
     Register_SI = 6,
     Register_DI = 7,
+    Register_AH = Register_SP,
+    Register_CH = Register_BP,
+    Register_DH = Register_SI,
+    Register_BH = Register_DI,
 
     Register_8 =  8,
     Register_9 =  9,
@@ -113,6 +118,11 @@ typedef struct OperandMemoryIndirect
     Register reg;
 } OperandMemoryIndirect;
 
+typedef struct OperandMemoryDirect
+{
+    u64 memory;
+} OperandMemoryDirect;
+
 typedef union OperandImmediate
 {
     u8  _8;
@@ -130,6 +140,7 @@ typedef struct Operand
         Register reg;
         OperandImmediate imm;
         OperandMemoryIndirect mem_indirect;
+        OperandMemoryDirect memory;
     };
 } Operand;
 
@@ -141,7 +152,7 @@ typedef struct Operand
 define_register(rax,    Register_A, 64);
 define_register(rcx,    Register_C, 64);
 define_register(rdx,    Register_D, 64);
-define_register(rbx,    Register_C, 64);
+define_register(rbx,    Register_B, 64);
 define_register(rsp,    Register_SP, 64);
 define_register(rbp,    Register_BP, 64);
 define_register(rsi,    Register_SI, 64);
@@ -177,7 +188,7 @@ define_register(r15d,   Register_15, 32);
 define_register(ax,     Register_A,  16);
 define_register(cx,     Register_C,  16);
 define_register(dx,     Register_D,  16);
-define_register(bx,     Register_C,  16);
+define_register(bx,     Register_B,  16);
 define_register(sp,     Register_SP, 16);
 define_register(bp,     Register_BP, 16);
 define_register(si,     Register_SI, 16);
@@ -195,11 +206,11 @@ define_register(r15w,   Register_15, 16);
 define_register(al,     Register_A,  8);
 define_register(cl,     Register_C,  8);
 define_register(dl,     Register_D,  8);
-define_register(bl,     Register_C,  8);
-define_register(spl,    Register_SP, 8);
-define_register(bpl,    Register_BP, 8);
-define_register(sil,    Register_SI, 8);
-define_register(dil,    Register_DI, 8);
+define_register(bl,     Register_B,  8);
+define_register(ah,     Register_AH, 8);
+define_register(ch,     Register_CH, 8);
+define_register(dh,     Register_DH, 8);
+define_register(bh,     Register_BH, 8);
 define_register(r8b,    Register_8,  8);
 define_register(r9b,    Register_9,  8);
 define_register(r10b,   Register_10, 8);
@@ -288,6 +299,11 @@ static inline Operand imm8(u8 value)
     return (const Operand)_imm(8, value);
 }
 
+static inline Operand imm16(u16 value)
+{
+    return (const Operand)_imm(16, value);
+}
+
 static inline Operand imm32(u32 value)
 {
     return (const Operand)_imm(32, value);
@@ -296,6 +312,16 @@ static inline Operand imm32(u32 value)
 static inline Operand imm64(u64 value)
 {
     return (const Operand)_imm(64, value);
+}
+#undef _imm
+
+static inline Operand memory(u32 value)
+{
+    return (const Operand)
+    {
+        .type = OperandType_MemoryDirect,
+        .memory.memory = value,
+    };
 }
 
 static inline Operand stack(s32 offset)
@@ -335,27 +361,34 @@ typedef struct OperandEncoding
     OperandEncodingType type;
     OperandSize size;
 } OperandEncoding;
+typedef struct OperandCombination
+{
+    u8 rex_byte;
+    OperandEncoding operands[4];
+} OperandCombination;
 
+typedef enum InstructionOptionType
+{
+    None = 0,
+    Digit,
+    Reg,
+    OpCodePlusReg,
+} InstructionOptionType;
+
+typedef struct InstructionOptions
+{
+    InstructionOptionType type;
+    u8 digit;
+} InstructionOptions;
 typedef struct InstructionEncoding
 {
-    u16 op_code;
-    InstructionExtensionType    extension;
-    u8 op_code_extension;
-    union
-    {
-        OperandEncoding     types[3];
-        struct
-        {
-            OperandEncoding type1;
-            OperandEncoding type2;
-            OperandEncoding type3;
-        };
-    };
+    u8 op_code;
+    InstructionOptions options;
+    OperandCombination operand_combinations[4];
 } InstructionEncoding;
 
 typedef struct Mnemonic
 {
-    const char* name;
     const InstructionEncoding* encodings;
     u32 encoding_count;
 } Mnemonic;
@@ -363,226 +396,316 @@ typedef struct Mnemonic
 typedef struct Instruction
 {
     Mnemonic mnemonic;
-    union
-    {
-        Operand operands[3];
-        struct
-        {
-            Operand op1;
-            Operand op2;
-            Operand op3;
-        };
-    };
+    Operand operands[4];
 } Instruction;
 
+#define OP(_type, _size) { .type = _type,  .size = OperandSize_ ## _size, }
+#define OPTS(...) __VA_ARGS__
+#define NO_OPTS .rex_byte = 0
+#define OPS(...) .operands = { __VA_ARGS__ }
+#define NO_OPS {0}
+#define OP_COMB(_ops, _opts) { _ops, _opts }
+#define ENC_OPTS(...) .options = { __VA_ARGS__ }
+#define ENCODING(_op_code, options, ...) { .op_code = _op_code, options, .operand_combinations = { __VA_ARGS__ }, }
+
+const InstructionEncoding adc_encoding[] =
+{
+    ENCODING(0x14,ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8)))
+        ),
+    ENCODING(0x15, ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),		OPS(OP(OET_Register_A, 32), OP(OET_Immediate, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_A, 64), OP(OET_Immediate, 32))),
+        ),
+    ENCODING(0x80, ENC_OPTS(.type = Digit, .digit = 2),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
+        ),
+    ENCODING(0x81, ENC_OPTS(.type = Digit, .digit = 2),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
+        ),
+    ENCODING(0x83, ENC_OPTS(.type = Digit, .digit = 2),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
+        ),
+    ENCODING(0x10, ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+        ),
+    ENCODING(0x11,ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
+        ),
+    ENCODING(0x12,ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+        ),
+    ENCODING(0x13,ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
+        ),
+};
+
+
+// @TODO:
+const InstructionEncoding adcx_encoding[] = {0};
+const InstructionEncoding add_encoding[] = {
+    ENCODING(0x04,ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(0x05,ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 32), OP(OET_Immediate, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_A, 64), OP(OET_Immediate, 32))),
+    ),
+    ENCODING(0x80,ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory,8), OP(OET_Immediate, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory,8), OP(OET_Immediate, 8))),
+        ),
+    ENCODING(0x81,ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
+    ),
+    ENCODING(0x83,ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(0x00,ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+    ),
+    ENCODING(0x01,ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
+    ),
+    ENCODING(0x02,ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(0x03,ENC_OPTS(.type = Reg),
+    	OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
+    	OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
+    	OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
+    ),
+};
+
+const InstructionEncoding adox_encoding[] =
+{
+    0
+};
+
+const InstructionEncoding and_encoding[] =
+{
+    0
+};
 
 const InstructionEncoding mov_encoding[] =
 {
-    // mov rm64, r64
-    {
-        .op_code = 0x89,
-        .extension = IET_Register,
-        .types =
-        {
-            [0] = {.type = OET_Register_Or_Memory, .size = OperandSize_64, },
-            [1] = {.type = OET_Register, .size = OperandSize_64,},
-        },
-    },
-    //mov rm64, imm32
-    {
-        .op_code = 0xc7,
-        .extension = IET_Register,
-        .types = 
-        {
-            [0] = {.type = OET_Register_Or_Memory, .size = OperandSize_64, },
-            [1] = {.type = OET_Immediate, .size = OperandSize_32,},
-        },
-    },
-    // mov r64, imm64
-    {
-        .op_code = 0xb8,
-        .extension = IET_Register,
-        .types =
-        {
-            [0] = {.type = OET_Register, .size = OperandSize_64,},
-            [1] = {.type = OET_Immediate, .size = OperandSize_64,},
-        },
-    },
-    // mov r32, imm32
-    {
-        .op_code = 0xb8,
-        .extension = IET_Plus_Register,
-        .types =
-        {
-            [0] = {.type = OET_Register, .size = OperandSize_32,},
-            [1] = {.type = OET_Immediate, .size = OperandSize_32,},
-        },
-    },
-    // mov r8, imm8
-    {
-        .op_code = 0xb0,
-        .extension = IET_Plus_Register,
-        .types =
-        {
-            [0] = {.type = OET_Register, .size = OperandSize_8,},
-            [1] = {.type = OET_Immediate, .size = OperandSize_8,},
-        },
-    },
-};
-
-const InstructionEncoding ret_encoding[] =
-{
-    {
-        .op_code = 0xc3,
-        .extension = IET_Register,
-        .types =
-        {
-            [0] = OET_None,
-            [1] = OET_None,
-        },
-    },
-};
-
-const InstructionEncoding add_encoding[] =
-{
-    {
-        .op_code = 0x05,
-        .extension = IET_Register,
-        .types = 
-        {
-            [0] = {.type = OET_Register_A, .size = OperandSize_32,},
-            [1] = {.type = OET_Immediate, .size = OperandSize_32,},
-        },
-    },
-    {
-        .op_code = 0x03,
-        .extension = IET_Register,
-        .types =
-        {
-            [0] = {.type = OET_Register, .size = OperandSize_Any},
-            [1] = {.type = OET_Register_Or_Memory, .size = OperandSize_Any, },
-        },
-    },
-    {
-        .op_code = 0x83,
-        .extension = IET_OpCode,
-        .op_code_extension = 0,
-        .types =
-        {
-            [0] = {.type = OET_Register_Or_Memory, .size = OperandSize_Any, },
-            [1] = {.type = OET_Immediate, .size = OperandSize_8, },
-        },
-    },
-    {
-        .op_code = 0x81,
-        .extension = IET_Register,
-        .op_code_extension = 0,
-        .types =
-        {
-            [0] = {.type = OET_Register_Or_Memory, .size = OperandSize_Any, },
-            [1] = {.type = OET_Immediate, .size = OperandSize_32, },
-        },
-    },
-};
-
-const InstructionEncoding sub_encoding[] = 
-{
-    {
-        .op_code = 0x83,
-        .extension = IET_OpCode,
-        .op_code_extension = 5,
-        .types =
-        {
-            
-            [0] = OET_Register_Or_Memory,
-            [1] = OET_Immediate,
-        },
-    },
-};
-
-const InstructionEncoding push_encoding[] =
-{
-    {
-        .op_code = 0x50,
-        .extension = IET_Plus_Register,
-        .type1 = {.type = OET_Register, .size = OperandSize_64},
-    },
-};
-const InstructionEncoding pop_encoding[] =
-{
-    {
-        .op_code = 0x58,
-        .extension = IET_Plus_Register,
-        .type1 = {.type = OET_Register, .size = OperandSize_64},
-    },
+    0
 };
 
 #define define_mnemonic(instruction)\
     const Mnemonic instruction = { .encodings = (const InstructionEncoding*) instruction ## _encoding, .encoding_count = array_length(instruction ## _encoding), }
 
-define_mnemonic(mov);
+define_mnemonic(adc);
 define_mnemonic(add);
-define_mnemonic(sub);
-define_mnemonic(push);
-define_mnemonic(pop);
 
-const Instruction ret = 
+bool find_encoding(ExecutionBuffer* eb, Instruction instruction, u32* encoding_index, u32* combination_index)
 {
-    .mnemonic = 
-    {
-        .encodings = (InstructionEncoding*) ret_encoding,
-        .encoding_count = array_length(ret_encoding),
-    },
-    // No operands
-};
+    u32 encoding_count = instruction.mnemonic.encoding_count;
+    const InstructionEncoding* encodings = instruction.mnemonic.encodings;
 
-
-static void encode(ExecutionBuffer* eb, Instruction instruction)
-{
-    for (u32 i = 0; i < instruction.mnemonic.encoding_count; i++)
+    for (u32 encoding_i = 0; encoding_i < encoding_count; encoding_i++)
     {
-        InstructionEncoding encoding = instruction.mnemonic.encodings[i];
-        bool match = true;
-        for (u32 j = 0; j < array_length(instruction.operands); j++)
+        InstructionEncoding encoding = encodings[encoding_i];
+        u32 combination_count = array_length(encoding.operand_combinations);
+
+        for (u32 combination_i = 0; combination_i < combination_count; combination_i++)
         {
-            OperandEncodingType encoding_type = encoding.types[j].type;
-            OperandSize encoding_size = encoding.types[j].size;
-            Operand operand = instruction.operands[j];
-            OperandType operand_type = operand.type;
-            OperandSize operand_size = operand.size;
+            OperandCombination combination = encoding.operand_combinations[combination_i];
+            const u32 operand_count = array_length(combination.operands);
+            bool matched = true;
 
-            if (operand_type == OperandType_None && encoding_type == OET_None)
+            for (u32 operand_i = 0; operand_i < operand_count; operand_i++)
             {
-                continue;
-            }
-            if (operand_type == OperandType_Register && encoding_type == OET_Register_A && operand.reg == Register_A && (encoding_size == operand_size || encoding_size == OperandSize_Any))
-            {
-                continue;
-            }
-            if (operand_type == OperandType_Register && encoding_type == OET_Register && (encoding_size == operand_size || encoding_size == OperandSize_Any))
-            {
-                continue;
-            }
-            if (operand_type == OperandType_Register && encoding_type == OET_Register_Or_Memory && (encoding_size == operand_size || encoding_size == OperandSize_Any))
-            {
-                continue;
-            }
-            if (operand_type == OperandType_Immediate && encoding_type == OET_Immediate && (encoding_size == operand_size || encoding_size == OperandSize_Any))
-            {
-                continue;
-            }
-            if (operand_type == OperandType_MemoryIndirect && encoding_type == OET_Register_Or_Memory)
-            {
-                continue;
+                Operand operand = instruction.operands[operand_i];
+                OperandEncoding operand_encoding = combination.operands[operand_i];
+
+                switch (operand.type)
+                {
+                    case OperandType_None:
+                        if (operand_encoding.type == OET_None)
+                        {
+                            continue;
+                        }
+                        break;
+                    case OperandType_Register:
+                        if (operand_encoding.type == OET_Register && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
+                        if (operand_encoding.type == OET_Register_A && operand.reg == Register_A && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
+                        if (operand_encoding.type == OET_Register_Or_Memory && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
+                        break;
+                    case OperandType_Immediate:
+                        if (operand_encoding.type == OET_Immediate && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
+                        break;
+                    case OperandType_MemoryIndirect:
+                        if (operand_encoding.type == OET_Memory && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
+                        break;
+                    case OperandType_RIP_Relative:
+                        RED_NOT_IMPLEMENTED;
+                        break;
+                }
+
+                matched = false;
+                break;
             }
 
-            match = false;
+            if (matched)
+            {
+                *encoding_index = encoding_i;
+                *combination_index = combination_i;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void encode(ExecutionBuffer* eb, Instruction instruction)
+{
+    u32 encoding_index;
+    u32 combination_index;
+    if (!find_encoding(eb, instruction, &encoding_index, &combination_index))
+    {
+        return;
+    }
+
+    InstructionEncoding encoding = instruction.mnemonic.encodings[encoding_index];
+    OperandCombination combination = encoding.operand_combinations[combination_index];
+    u32 operand_count = array_length(combination.operands);
+
+    u8 reg_code = 0;
+
+    for (u32 operand_i = 0; operand_i < operand_count; operand_i++)
+    {
+        OperandEncoding op_encoding = combination.operands[operand_i];
+        Operand operand = instruction.operands[operand_i];
+        if (op_encoding.type == OET_None)
+        {
+            break;
         }
 
-        if (!match)
+        if (operand.type == OperandType_Register)
         {
-            continue;
+            reg_code = operand.reg;
         }
+    }
+
+    if (combination.rex_byte)
+    {
+        u8_append(eb, combination.rex_byte);
+    }
+
+
+    u8 op_code = encoding.op_code;
+    if (encoding.options.type == OpCodePlusReg)
+    {
+        op_code = (op_code & 0b11111000) | (reg_code & 0b111);
+    }
+
+    u8_append(eb, op_code);
+
+    // MOD RM
+    bool is_digit = encoding.options.type == Digit;
+    bool is_reg = encoding.options.type == Reg;
+    bool need_mod_rm = is_digit || is_reg;
+    if (need_mod_rm)
+    {
+        u8 register_or_digit;
+        if (is_digit)
+        {
+            register_or_digit = encoding.options.digit;
+        }
+        else
+        {
+            register_or_digit = reg_code;
+        }
+        u8 r_m = 0;
+        u8 mod = 0;
+        if (instruction.operands[0].type == OperandType_Register)
+        {
+            mod = Mod_Register;
+            r_m = reg_code;
+        }
+        else
+        {
+            RED_NOT_IMPLEMENTED;
+        }
+
+        u8 mod_rm = (
+            (mod << 6) |
+            (register_or_digit << 3) |
+            (r_m)
+            );
+
+        u8_append(eb, mod_rm);
+    }
+
+    // SIB
+
+    // DISPLACEMENT
+
+    // IMMEDIATE
+    for (u32 operand_i = 0; operand_i < operand_count; operand_i++)
+    {
+        Operand operand = instruction.operands[operand_i];
+        if (operand.type == OperandType_Immediate)
+        {
+            switch (operand.size)
+            {
+                case OperandSize_8:
+                    u8_append(eb, operand.imm._8);
+                    break;
+                case OperandSize_16:
+                    u16_append(eb, operand.imm._16);
+                    break;
+                case OperandSize_32:
+                    u32_append(eb, operand.imm._32);
+                    break;
+                case OperandSize_64:
+                    u64_append(eb, operand.imm._64);
+                    break;
+            }
+        }
+    }
+}
+
+#if 0
+static void encodebasdjkasd(ExecutionBuffer* eb, Instruction instruction)
+{
         
         bool need_mod_rm = false;
         u8 register_or_op_code = 0;
@@ -665,17 +788,17 @@ static void encode(ExecutionBuffer* eb, Instruction instruction)
             u8 mod_rm = (
                 (mod << 6) |
                 (register_or_op_code << 3) | 
-				(r_m)
-				);
-			print("Mod register: 0x%02X, register_or_op_code: 0x%02X, r_m: 0x%02X. Appending: 0x%02X\n", Mod_Register, register_or_op_code, r_m, mod_rm);
-			print("Result: ");
-			print_binary(&mod_rm, 1);
-			u8 mod_rm_expected = 0xc3;
-			print("Expected: ");
-			print_binary(&mod_rm_expected, 1);
-			print("Expected: 0x%02X, result: 0x%02X\n", mod_rm_expected, mod_rm);
+                (r_m)
+                );
+            print("Mod register: 0x%02X, register_or_op_code: 0x%02X, r_m: 0x%02X. Appending: 0x%02X\n", Mod_Register, register_or_op_code, r_m, mod_rm);
+            print("Result: ");
+            print_binary(&mod_rm, 1);
+            u8 mod_rm_expected = 0xc3;
+            print("Expected: ");
+            print_binary(&mod_rm_expected, 1);
+            print("Expected: 0x%02X, result: 0x%02X\n", mod_rm_expected, mod_rm);
 
-			//TODO: This hack was working before the crash
+            //TODO: This hack was working before the crash
             u8_append(eb, mod_rm);
         }
 
@@ -701,129 +824,32 @@ static void encode(ExecutionBuffer* eb, Instruction instruction)
         for (u32 j = 0; j < 2; j++)
         {
             Operand operand = instruction.operands[j];
-			switch (operand.type)
-			{
-				case OperandType_Immediate:
-					switch (operand.size)
-					{
-						case (OperandSize_64):
-							u64_append(eb, operand.imm._64);
-							break;
-						case (OperandSize_32):
-							u32_append(eb, operand.imm._32);
-							break;
-						case (OperandSize_8):
-							u8_append(eb, operand.imm._8);
-							break;
-						default:
-							break;
-					}
+            switch (operand.type)
+            {
+                case OperandType_Immediate:
+                    switch (operand.size)
+                    {
+                        case (OperandSize_64):
+                            u64_append(eb, operand.imm._64);
+                            break;
+                        case (OperandSize_32):
+                            u32_append(eb, operand.imm._32);
+                            break;
+                        case (OperandSize_8):
+                            u8_append(eb, operand.imm._8);
+                            break;
+                        default:
+                            break;
+                    }
                     break;
                 default:
                     break;
-			}
-		}
-	}
+            }
+        }
+    }
 }
 
-typedef struct Function
-{
-    ExecutionBuffer eb;
-    s8 stack_reserve;
-} Function;
 
-static inline Operand declare_variable(Function* fn)
-{
-    fn->stack_reserve += 0x10;
-    return stack(0);
-}
-
-static inline void assign(Function* fn, Operand a, Operand b)
-{
-    encode(&fn->eb, (Instruction) { mov, a, b  });
-}
-
-static inline Operand mutating_plus(Function* fn, Operand a, Operand b)
-{
-    encode(&fn->eb, (Instruction) { add, a, b  });
-    return a;
-}
-
-static inline Function fn_begin(void)
-{
-    Function fn =
-    {
-        .eb = give_me(1024),
-        .stack_reserve = 8,
-    };
-    encode(&fn.eb, (Instruction) { sub, rsp, imm8(0xcc) });
-    return fn;
-}
-
-static inline void fn_return(Function* fn, Operand to_return)
-{
-    // Override stack reservation
-    u64 save_occupied = fn->eb.len;
-    fn->eb.len = 0;
-    encode(&fn->eb, (Instruction) { sub, rsp, imm8(fn->stack_reserve) });
-    fn->eb.len = save_occupied;
-
-    encode(&fn->eb, (Instruction) { mov, rax, to_return });
-    encode(&fn->eb, (Instruction) { add, rsp, imm8(fn->stack_reserve) });
-    encode(&fn->eb, ret);
-}
-
-#define TEST_EQUAL_S64(result, expected)\
-{\
-    if (result == expected)\
-    {\
-        s32 chars = printf("[TEST] %s", __func__);\
-        while (chars < 40)\
-        {\
-            putc(' ', stdout);\
-            chars++;\
-        }\
-        printf("[OK]\n");\
-    }\
-    else\
-    {\
-        printf("TEST %s \t[FAILED] Unexpected result: %I64d. Expected result: %I64d\n", __func__, result, expected);\
-        print_chunk_of_bytes_in_hex(eb.ptr, eb.len, "Buffer:\t");\
-    }\
-}
-
-static inline ExecutionBuffer make_eb_increment(void)
-{
-    ExecutionBuffer eb = give_me(1024);
-
-    encode(&eb, (Instruction) { mov, {rax, rdi} });
-    encode(&eb, (Instruction) { add, rax, imm32(1)});
-    encode(&eb, ret);
-
-    print_chunk_of_bytes_in_hex(eb.ptr, eb.len, "Buffer:\t");
-    return eb;
-}
-
-static void test_increment_s64(s64 n)
-{
-    ExecutionBuffer eb = make_eb_increment();
-    //print_chunk_of_bytes_in_hex(eb.ptr, eb.len, "Buffer:\t");
-
-    make_increment_s64* fn = (make_increment_s64*)eb.ptr;
-    s64 result = fn(n);
-    //print("We are about to call\n");
-    s64 expected = n + 1;
-
-    TEST_EQUAL_S64(result, expected);
-}
-
-static make_increment_s64* make_increment_s64_fn(void)
-{
-    ExecutionBuffer eb = make_eb_increment();
-
-    make_increment_s64* fn = (make_increment_s64*)eb.ptr;
-    return fn;
-}
 
 static void test_add_rax_imm32(s32 n)
 {
@@ -967,6 +993,101 @@ static void test_add_r64_imm32(void* s)
 
     test_buffer(&eb, expected.ptr, expected.len, __func__);
 }
+#endif
+
+static void test_adc_al_imm8(void* s)
+{
+    u8 n = 0x1;
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {adc, {al, imm8(n)}});
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x14);
+    u8_append(&expected, n);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+static void test_adc_ax_imm16(void* s)
+{
+    u16 n = 0x1234;
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {adc, {ax, imm16(n)}});
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x15);
+    u16_append(&expected, n);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+
+static void test_adc_eax_imm32(void* s)
+{
+    u32 n = 0x123456;
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {adc, {eax, imm32(n)}});
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x15);
+    u32_append(&expected, n);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+static void test_adc_rax_imm32(void* s)
+{
+    u32 n = 0x123456;
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {adc, {rax, imm32(n)}});
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x48);
+    u8_append(&expected, 0x15);
+    u32_append(&expected, n);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+
+static void test_adc_r64_m64(void* s)
+{
+    u32 n = 0xfffffff;
+    ExecutionBuffer eb = give_me(64);
+    encode(&eb, (Instruction) {adc, {rbx, memory(n)}});
+
+    ExecutionBuffer expected = give_me(64);
+    u8_append(&expected, 0x48);
+    u8_append(&expected, 0x13);
+    u8_append(&expected, 0x04);
+    u8_append(&expected, 0x25);
+    u32_append(&expected, n);
+
+    test_buffer(&eb, expected.ptr, expected.len, __func__);
+}
+#define define_instr(...) __VA_ARGS__
+#define define_expected(...) __VA_ARGS__
+#define define_test_fn(_fn_name, _int_size, _instr, _test_bytes) \
+static void _fn_name(void* unused)\
+{\
+    u ## _int_size test_n = UINT ## _int_size ## _MAX;\
+    ExecutionBuffer eb = give_me(64);\
+    encode(&eb, (Instruction) { _instr });\
+\
+    u8 test_array[] = { _test_bytes };\
+    ExecutionBuffer expected = give_me(64);\
+    for (u32 i = 0; i < array_length(test_array); i++)\
+    {\
+        u8_append(&expected, test_array[i]);\
+    }\
+\
+    test_buffer(&eb, expected.ptr, expected.len, __func__);\
+}
+
+define_test_fn(test_add_al_imm8,    8,  define_instr(add, { al, imm8(test_n) }), define_expected(0x04, UINT8_MAX))
+define_test_fn(test_add_ax_imm16,   16, define_instr(add, { ax, imm16(test_n) }), define_expected(0x05, 0xff, 0xff))
+define_test_fn(test_add_eax_imm32,  32, define_instr(add, { eax, imm32(test_n) }), define_expected(0x05, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_add_rax_imm32,  32, define_instr(add, { rax, imm32(test_n) }), define_expected(0x48, 0x05, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_add_rm8_imm8,   8,  define_instr(add, { bl, imm8(test_n) }), define_expected(0x80, 0xc3, 0xff))
+define_test_fn(test_add_rm16_imm16, 16, define_instr(add, { bx, imm16(test_n) }), define_expected(0x66, 0x81, 0xc3, 0xff, 0xff))
+define_test_fn(test_add_rm32_imm32, 32, define_instr(add, { ebx, imm32(test_n) }), define_expected(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
+define_test_fn(test_add_rm64_imm32, 32, define_instr(add, { rbx, imm32(test_n) }), define_expected(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
 
 typedef void TestFn(void*);
 typedef struct Test
@@ -977,7 +1098,13 @@ typedef struct Test
 
 Test tests[] =
 {
-    {test_add_r64_imm32}
+    { test_add_al_imm8},
+    { test_add_ax_imm16},
+    { test_add_eax_imm32},
+    { test_add_rax_imm32},
+    { test_add_rm8_imm8},
+    { test_add_rm32_imm32},
+    { test_add_rm64_imm32},
 };
 
 s32 main(s32 argc, char* argv[])
