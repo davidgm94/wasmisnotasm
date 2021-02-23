@@ -952,7 +952,6 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     u8 mod = 0;
     if (need_mod_rm)
     {
-
         for (u32 oi = 0; oi < operand_count; oi++)
         {
             Operand operand = instruction.operands[oi];
@@ -965,9 +964,16 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                             mod = Mod_Register;
                             r_m = operand.reg;
                             reg_code = operand.reg;
+                            if (is_reg)
+                            {
+                                register_or_digit = operand.reg;
+                            }
                             break;
                         case 1:
-                            register_or_digit = operand.reg;
+                            if (is_reg)
+                            {
+                                register_or_digit = operand.reg;
+                            }
                             break;
                         default:
                             break;
@@ -1179,6 +1185,8 @@ define_test_fn(pop_r64, 64, define_instr(pop, { rbp }), define_expected(0x5d))
 define_test_fn(push_r64, 64, define_instr(push, { rbp }), define_expected(0x55))
 
 define_test_fn(mov_qword_ptr_r64_offset_r64, 64, define_instr(mov, { stack_rbp(-8), rdi }), define_expected(0x48, 0x89, 0x7d, 0xf8))
+define_test_fn(mov_rax_qword_ptr_r64_offset_r64, 64, define_instr(mov, { rax, stack_rbp(-8)}), define_expected(0x48, 0x8b, 0x45, 0xf8))
+
 typedef void TestFn(void*);
 typedef struct Test
 {
@@ -1189,6 +1197,7 @@ typedef struct Test
 Test tests[] =
 {
     { test_mov_qword_ptr_r64_offset_r64},
+    { test_mov_rax_qword_ptr_r64_offset_r64 },
 };
 
 s32 main(s32 argc, char* argv[])
