@@ -1060,6 +1060,8 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                 case OperandSize_64:
                     u64_append(eb, operand.imm._64);
                     break;
+                default:
+                    break;
             }
         }
     }
@@ -1120,7 +1122,7 @@ static void test_adc_r64_m64(void* s)
 {
     u32 n = 0xfffffff;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {rbx, memory(n)}});
+    encode(&eb, (Instruction) {adc, {rbx, stack(n)}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x48);
@@ -1131,79 +1133,61 @@ static void test_adc_r64_m64(void* s)
 
     test_buffer(&eb, expected.ptr, expected.len, __func__);
 }
-#define define_instr(...) __VA_ARGS__
-#define define_expected(...) __VA_ARGS__
-#define define_test_fn(_fn_name, _int_size, _instr, _test_bytes) \
-static void test_ ## _fn_name(void* unused)\
-{\
-    u ## _int_size test_n = UINT ## _int_size ## _MAX;\
-    ExecutionBuffer eb = give_me(64);\
-    encode(&eb, (Instruction) { _instr });\
-\
-    u8 test_array[] = { _test_bytes };\
-    ExecutionBuffer expected = give_me(64);\
-    for (u32 i = 0; i < array_length(test_array); i++)\
-    {\
-        u8_append(&expected, test_array[i]);\
-    }\
-\
-    test_buffer(&eb, expected.ptr, expected.len, __func__);\
+#define INSTR(...) __VA_ARGS__
+#define EXPECTED(...) __VA_ARGS__
+static bool test_instruction(const char* test_name, Instruction instruction, u8* expected_bytes, u8 expected_byte_count)
+{
+    const u32 buffer_size = 64;
+    ExecutionBuffer eb = give_me(buffer_size);
+    encode(&eb, instruction);
+
+    ExecutionBuffer expected = give_me(buffer_size);
+    for (u32 i = 0; i < expected_byte_count; i++)
+    {
+        u8_append(&expected, expected_bytes[i]);
+    }
+    return test_buffer(&eb, expected.ptr, expected.len, test_name);
 }
-
-/* ADD */
-define_test_fn(add_al_imm8, 8, define_instr(add, { al, imm8(test_n) }), define_expected(0x04, UINT8_MAX))
-define_test_fn(add_ax_imm16, 16, define_instr(add, { ax, imm16(test_n) }), define_expected(0x05, 0xff, 0xff))
-define_test_fn(add_eax_imm32, 32, define_instr(add, { eax, imm32(test_n) }), define_expected(0x05, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(add_rax_imm32, 32, define_instr(add, { rax, imm32(test_n) }), define_expected(0x48, 0x05, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(add_rm8_imm8, 8, define_instr(add, { bl, imm8(test_n) }), define_expected(0x80, 0xc3, 0xff))
-define_test_fn(add_rm16_imm16, 16, define_instr(add, { bx, imm16(test_n) }), define_expected(0x66, 0x81, 0xc3, 0xff, 0xff))
-define_test_fn(add_rm32_imm32, 32, define_instr(add, { ebx, imm32(test_n) }), define_expected(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(add_rm64_imm32, 32, define_instr(add, { rbx, imm32(test_n) }), define_expected(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
-
-/* MOV */
-
-define_test_fn(mov_bl_cl, 8, define_instr(mov, { bl, cl }), define_expected(0x88, 0xcb))
-define_test_fn(mov_bx_cx, 16, define_instr(mov, { bx, cx }), define_expected(0x66, 0x89, 0xcb))
-define_test_fn(mov_ebx_ecx, 32, define_instr(mov, { ebx, ecx }), define_expected(0x89, 0xcb))
-define_test_fn(mov_rbx_rcx, 64, define_instr(mov, { rbx, rcx }), define_expected(0x48, 0x89, 0xcb))
-
-define_test_fn(mov_al_imm8, 8, define_instr(mov, { al, imm8(test_n) }), define_expected(0xb0, UINT8_MAX))
-define_test_fn(mov_ax_imm16, 16, define_instr(mov, { ax, imm16(test_n) }), define_expected(0x66, 0xb8, 0xff, 0xff))
-define_test_fn(mov_eax_imm32, 32, define_instr(mov, { eax, imm32(test_n) }), define_expected(0xb8, 0xff, 0xff))
-define_test_fn(mov_rax_imm32, 32, define_instr(mov, { rax, imm32(test_n) }), define_expected(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(mov_rax_imm64, 64, define_instr(mov, { rax, imm64(test_n) }), define_expected(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(mov_r8_imm8,   8,  define_instr(mov, { bl, imm8(test_n) }), define_expected(0xb3, 0xff))
-define_test_fn(mov_r16_imm16, 16, define_instr(mov, { bx, imm16(test_n) }), define_expected(0x66, 0xbb, 0xff, 0xff))
-define_test_fn(mov_r32_imm32, 32, define_instr(mov, { ebx, imm32(test_n) }), define_expected(0xbb, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(mov_r64_imm64, 64, define_instr(mov, { rbx, imm64(test_n) }), define_expected(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
-define_test_fn(mov_rm64_imm32, 32, define_instr(mov, { rbx, imm32(test_n) }), define_expected(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff))
-
-/* POP */
-define_test_fn(pop_r64, 64, define_instr(pop, { rbp }), define_expected(0x5d))
-
-/* PUSH */
-define_test_fn(push_r64, 64, define_instr(push, { rbp }), define_expected(0x55))
-
-define_test_fn(mov_qword_ptr_r64_offset_r64, 64, define_instr(mov, { stack_rbp(-8), rdi }), define_expected(0x48, 0x89, 0x7d, 0xf8))
-define_test_fn(mov_rax_qword_ptr_r64_offset_r64, 64, define_instr(mov, { rax, stack_rbp(-8)}), define_expected(0x48, 0x8b, 0x45, 0xf8))
-
-typedef void TestFn(void*);
-typedef struct Test
-{
-    TestFn* fn;
-    void* args;
-} Test;
-
-Test tests[] =
-{
-    { test_mov_qword_ptr_r64_offset_r64},
-    { test_mov_rax_qword_ptr_r64_offset_r64 },
-};
+#define TEST(test_name, _instr, _test_bytes)\
+    const u8 expected_bytes ## test_name [] = { _test_bytes };\
+    test_instruction(test_name, _instr, expected_bytes ## test_name, array_length(expected_bytes ## test_name );
 
 s32 main(s32 argc, char* argv[])
 {
-    for (u32 i = 0; i < array_length(tests); i++)
-    {
-        tests[i].fn(tests[i].args);
-    }
+    /* ADD */
+    TEST(add_al_imm8, INSTR(add, { al, imm8(0xff) }), EXPECTED(0x04, UINT8_MAX))
+    TEST(add_ax_imm16, INSTR(add, { ax, imm16(0xffff) }), EXPECTED(0x05, 0xff, 0xff))
+    TEST(add_eax_imm32, INSTR(add, { eax, imm32(0xffffffff) }), EXPECTED(0x05, 0xff, 0xff, 0xff, 0xff))
+    TEST(add_rax_imm32, INSTR(add, { rax, imm32(0xffffffff) }), EXPECTED(0x48, 0x05, 0xff, 0xff, 0xff, 0xff))
+    TEST(add_rm8_imm8, INSTR(add, { bl, imm8(0xff) }), EXPECTED(0x80, 0xc3, 0xff))
+    TEST(add_rm16_imm16, INSTR(add, { bx, imm16(0xffff) }), EXPECTED(0x66, 0x81, 0xc3, 0xff, 0xff))
+    TEST(add_rm32_imm32, INSTR(add, { ebx, imm32(0xffffffff) }), EXPECTED(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
+    TEST(add_rm64_imm32, INSTR(add, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff))
+
+    /* MOV */
+
+    TEST(mov_bl_cl, INSTR(mov, { bl, cl }), EXPECTED(0x88, 0xcb))
+    TEST(mov_bx_cx, INSTR(mov, { bx, cx }), EXPECTED(0x66, 0x89, 0xcb))
+    TEST(mov_ebx_ecx, INSTR(mov, { ebx, ecx }), EXPECTED(0x89, 0xcb))
+    TEST(mov_rbx_rcx, INSTR(mov, { rbx, rcx }), EXPECTED(0x48, 0x89, 0xcb))
+
+    TEST(mov_al_imm8, INSTR(mov, { al, imm8(0xff) }), EXPECTED(0xb0, UINT8_MAX))
+    TEST(mov_ax_imm16, INSTR(mov, { ax, imm16(0xffff) }), EXPECTED(0x66, 0xb8, 0xff, 0xff))
+    TEST(mov_eax_imm32, INSTR(mov, { eax, imm32(0xffffffff) }), EXPECTED(0xb8, 0xff, 0xff))
+    TEST(mov_rax_imm32, INSTR(mov, { rax, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff))
+    TEST(mov_rax_imm64, INSTR(mov, { rax, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
+    TEST(mov_r8_imm8,   INSTR(mov, { bl, imm8(0xff) }), EXPECTED(0xb3, 0xff))
+    TEST(mov_r16_imm16, INSTR(mov, { bx, imm16(0xffff) }), EXPECTED(0x66, 0xbb, 0xff, 0xff))
+    TEST(mov_r32_imm32, INSTR(mov, { ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff))
+    TEST(mov_r64_imm64, INSTR(mov, { rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff))
+    TEST(mov_rm64_imm32, INSTR(mov, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff))
+
+    /* POP */
+    TEST(pop_r64, INSTR(pop, { rbp }), EXPECTED(0x5d))
+
+    /* PUSH */
+    TEST(push_r64, INSTR(push, { rbp }), EXPECTED(0x55))
+
+    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack_rbp(-8), rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8))
+    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { rax, stack_rbp(-8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8))
 }
