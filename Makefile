@@ -1,16 +1,19 @@
+# This file is purely assistant to the project creator to build the program
+# The Makefile script is based on CMake. Despite this, feel free to use it and modify for your own use
+#
 BUILD_DIR=build
 EXE=wasmisnotasm
 DEBUGGER=kdbg
 
-all: $(BUILD_DIR)/$(EXE)
+all: compile
 
-$(BUILD_DIR)/$(EXE):
+compile:
 	make -C $(BUILD_DIR)
 
-run: $(BUILD_DIR)/$(EXE)
+run: compile
 	$(BUILD_DIR)/$(EXE)
 
-debug: build
+debug: compile
 	$(DEBUGGER) $(BUILD_DIR)/$(EXE)
 
 gen: clean
