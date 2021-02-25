@@ -3,6 +3,7 @@
 #include "execution_buffer.h"
 #include <stdio.h>
 #ifdef RED_OS_WINDOWS
+#error
 #else
 #include <sys/mman.h>
 #include <unistd.h>
@@ -11,8 +12,12 @@
 #ifdef RED_OS_WINDOWS
 #define MSVC_x86_64
 #else
+#if defined(RED_OS_LINUX)
 #define SYSTEM_V_x86_64
 #endif
+#endif
+
+#define TEST_MODE 0
 
 typedef s64 square_fn(s64);
 typedef s64 mul_fn(s64, s64);
@@ -320,7 +325,7 @@ static inline Operand imm64(u64 value)
 }
 #undef _imm
 
-
+#if defined (MSVC_x86_64)
 static inline Operand stack(s32 offset)
 {
     return (const Operand)
@@ -334,13 +339,12 @@ static inline Operand stack(s32 offset)
         },
     };
 }
-
-static inline Operand stack_rbp(s32 offset)
+#else
+static inline Operand stack(s32 offset)
 {
     return (const Operand)
     {
         .type = OperandType_MemoryIndirect,
-        .size = OperandSize_64,
         .mem_indirect =
         {
             .reg = rbp.reg,
@@ -348,6 +352,7 @@ static inline Operand stack_rbp(s32 offset)
         },
     };
 }
+#endif
 
 typedef enum InstructionExtensionType
 {
@@ -737,7 +742,18 @@ const InstructionEncoding rdssp_encoding[] = { 0 };
 const InstructionEncoding rdtsc_encoding[] = { 0 };
 const InstructionEncoding rdtscp_encoding[] = { 0 };
 const InstructionEncoding rep_encoding[] = { 0 };
-const InstructionEncoding ret_encoding[] = { 0 };
+const InstructionEncoding ret_encoding[] =
+{
+    ENCODING(0xC3, ENC_OPTS(0)),
+    ENCODING(0xCB, ENC_OPTS(0)),
+    ENCODING(0xC2, ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 16))),
+    ),
+    ENCODING(0xCA, ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 16))),
+    ),
+};
+
 const InstructionEncoding rsm_encoding[] = { 0 };
 const InstructionEncoding rstorssp_encoding[] = { 0 };
 const InstructionEncoding sahf_encoding[] = { 0 };
@@ -814,8 +830,9 @@ define_mnemonic(add);
 define_mnemonic(mov);
 define_mnemonic(pop);
 define_mnemonic(push);
+define_mnemonic(ret);
 
-bool find_encoding(ExecutionBuffer* eb, Instruction instruction, u32* encoding_index, u32* combination_index)
+bool find_encoding(Instruction instruction, u32* encoding_index, u32* combination_index)
 {
     u32 encoding_count = instruction.mnemonic.encoding_count;
     const InstructionEncoding* encodings = instruction.mnemonic.encodings;
@@ -865,11 +882,7 @@ bool find_encoding(ExecutionBuffer* eb, Instruction instruction, u32* encoding_i
                         }
                         break;
                     case OperandType_MemoryIndirect:
-                        if (operand_encoding.type == OET_Memory && operand_encoding.size == operand.size)
-                        {
-                            continue;
-                        }
-                        if (operand_encoding.type == OET_Register_Or_Memory && operand_encoding.size == operand.size)
+                        if (operand_encoding.type == OET_Register_Or_Memory)
                         {
                             continue;
                         }
@@ -913,8 +926,9 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
 {
     u32 encoding_index;
     u32 combination_index;
-    if (!find_encoding(eb, instruction, &encoding_index, &combination_index))
+    if (!find_encoding(instruction, &encoding_index, &combination_index))
     {
+        redassert(false);
         return;
     }
 
@@ -1157,7 +1171,7 @@ static bool test_instruction(const char* test_name, Instruction instruction, u8*
     u8 expected_bytes_ ## test_name [] = { _test_bytes };\
     test_instruction(#test_name, _instr, expected_bytes_ ## test_name, array_length(expected_bytes_ ## test_name )
 
-s32 main(s32 argc, char* argv[])
+void test_main(s32 argc, char* argv[])
 {
     TEST(add_ax_imm16, INSTR(add, { ax, imm16(0xffff) }), EXPECTED(0x66, 0x05, 0xff, 0xff)));
     TEST(add_al_imm8, INSTR(add, { al, imm8(0xff) }), EXPECTED(0x04, UINT8_MAX)));
@@ -1181,8 +1195,39 @@ s32 main(s32 argc, char* argv[])
     TEST(mov_r32_imm32, INSTR(mov, { ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff)));
     TEST(mov_r64_imm64, INSTR(mov, { rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
     TEST(mov_rm64_imm32, INSTR(mov, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack_rbp(-8), rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
-    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { rax, stack_rbp(-8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
+    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack(-8), rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
+    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { rax, stack(-8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
     TEST(pop_r64, INSTR(pop, { rbp }), EXPECTED(0x5d)));
     TEST(push_r64, INSTR(push, { rbp }), EXPECTED(0x55)));
+}
+
+void wna_main(s32 argc, char* argv[])
+{
+    ExecutionBuffer eb = give_me(1024);
+    encode(&eb, (Instruction) { push, { rbp } });
+    encode(&eb, (Instruction) { mov, { rbp, rsp } });
+    encode(&eb, (Instruction) { mov, { stack(-4), edi } });
+    encode(&eb, (Instruction) { mov, { eax, stack(-4) } });
+    encode(&eb, (Instruction) { add, { eax, stack(-4) } });
+    encode(&eb, (Instruction) { pop, { rbp } });
+    encode(&eb, (Instruction) { ret });
+
+    u8 expected[] = { 0x55, 0x48, 0x89, 0xe5, 0x89, 0x7d, 0xfc, 0x8b, 0x45, 0xfc, 0x03, 0x45, 0xfc, 0x5d, 0xc3 };
+    test_buffer(&eb, expected, array_length(expected), __func__);
+
+    typedef int SumFn(int);
+    SumFn* sum = (SumFn*) eb.ptr;
+    int n = 5;
+    int result = sum(n);
+    print("Result %d\n", result);
+    print("Expected %d\n", n + n);
+}
+
+s32 main(s32 argc, char* argv[])
+{
+#if TEST_MODE
+    test_main(argc, argv);
+#else
+    wna_main(argc, argv);
+#endif
 }

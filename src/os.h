@@ -12,6 +12,9 @@
 
 #if __linux__
 #define RED_OS_LINUX
+#if NDEBUG == 0
+#define RED_DEBUG
+#endif
 #elif _WIN32
 #define RED_OS_WINDOWS
 #else
