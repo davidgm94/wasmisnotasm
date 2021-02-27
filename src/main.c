@@ -182,23 +182,34 @@ typedef struct Operand
 typedef enum DescriptorType
 {
     Integer,
+    Pointer,
+    FixedSizeArray,
     Function,
 } DescriptorType;
 
 typedef struct Value Value;
 typedef struct DescriptorFunction
 {
-    Value* arguments;
-    s64 argument_count;
+    Value* arg_list;
+    s64 arg_count;
     Value* return_value;
 } DescriptorFunction;
 
+typedef struct DescriptorFixedSizeArray
+{
+    struct Descriptor* data;
+    s64 len;
+} DescriptorFixedSizeArray;
+
+struct Descriptor;
 typedef struct Descriptor
 {
     DescriptorType type;
     union
     {
         DescriptorFunction function;
+        struct Descriptor* pointer_to;
+        DescriptorFixedSizeArray fixed_size_array;
     };
 } Descriptor;
 
@@ -1789,7 +1800,7 @@ FunctionBuilder fn_begin(void)
 {
     FunctionBuilder fn_builder = {.eb = give_me(1024) };
 
-    fn_builder.descriptor.arguments = malloc(sizeof(Value) * array_length(parameter_registers));
+    fn_builder.descriptor.arg_list = malloc(sizeof(Value) * array_length(parameter_registers));
     fn_builder.descriptor.return_value = malloc(sizeof(Value));
     encode(&fn_builder.eb, (Instruction) { push, { reg.rbp } });
     encode(&fn_builder.eb, (Instruction) { mov, { reg.rbp, reg.rsp } });
@@ -1815,7 +1826,7 @@ Value fn_arg(FunctionBuilder* fn_builder, Descriptor arg_descriptor)
 
 Value fn_end(FunctionBuilder* fn_builder)
 {
-    fn_builder->descriptor.argument_count = fn_builder->next_arg;
+    fn_builder->descriptor.arg_count = fn_builder->next_arg;
     return (const Value)
     {
         .descriptor = (const Descriptor) {.type = Function, .function = fn_builder->descriptor},
@@ -1914,8 +1925,8 @@ void make_jump_label(FunctionBuilder* fn_builder, LabelPatch patch)
 Value fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
 {
     redassert(fn->descriptor.type == Function);
-    redassert(fn->descriptor.function.arguments);
-    redassert(fn->descriptor.function.argument_count == arg_count);
+    redassert(fn->descriptor.function.arg_list);
+    redassert(fn->descriptor.function.arg_count == arg_count);
     // @TODO: type-check arguments
     u32 size_index = register_size_jump_table[OperandSize_64];
     for (s64 i = 0; i < arg_count; i++)
@@ -1979,8 +1990,61 @@ void make_simple_lambda(void)
     redassert (result == 42);
 }
 
+u64 helper_value_as_function(Value * value)
+{
+    redassert(value->operand.type == OperandType_Immediate && value->operand.size == OperandSize_64);
+    return value->operand.imm._64;
+}
+
+#define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
+
+typedef void VoidRetVoid(void);
+void print_fn(void)
+{
+    const char* message = "Hello world!\n";
+    Descriptor message_descriptor =
+    {
+        .type = FixedSizeArray,
+        .fixed_size_array =
+        {
+            .data = &(Descriptor){.type = Integer,},
+            .len = strlen(message) + 1,
+        },
+    };
+    Value printf_arg =
+    {
+        .descriptor = { .type = Pointer, .pointer_to = &message_descriptor },
+        .operand = reg.rcx,
+    };
+    Value dummy_return = 
+    {
+        .descriptor = {.type = Integer},
+        .operand = imm32(0),
+    };
+    Value printf_value =
+    {
+        .descriptor = { .type = Function, .function = { .arg_list = &printf_arg, .arg_count = 1, .return_value = &dummy_return} },
+        .operand = imm64((u64)printf),
+    };
+
+    FunctionBuilder fn_builder = fn_begin();
+    Value message_value = 
+    {
+        .descriptor = {.type = Pointer},
+        .operand = imm64((u64)message),
+    };
+
+    fn_call(&fn_builder, &printf_value, &message_value, 1);
+
+    fn_return(&fn_builder, dummy_return);
+    Value fn_value = fn_end(&fn_builder);
+
+    value_as_function(&fn_value, VoidRetVoid)();
+}
+
 void wna_main(s32 argc, char* argv[])
 {
+    print_fn();
 }
 
 s32 main(s32 argc, char* argv[])
