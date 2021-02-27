@@ -2,6 +2,7 @@
 #include "os.h"
 #include "execution_buffer.h"
 #include <stdio.h>
+#include <stdlib.h>
 #ifdef RED_OS_WINDOWS
 #error
 #else
@@ -17,7 +18,7 @@
 #endif
 #endif
 
-#define TEST_MODE 1
+#define TEST_MODE 0
 
 typedef s64 square_fn(s64);
 typedef s64 mul_fn(s64, s64);
@@ -177,6 +178,35 @@ typedef struct Operand
         OperandRelative rel;
     };
 } Operand;
+
+typedef enum DescriptorType
+{
+    Integer,
+    Function,
+} DescriptorType;
+
+typedef struct Value Value;
+typedef struct DescriptorFunction
+{
+    Value* arguments;
+    s64 argument_count;
+    Value* return_value;
+} DescriptorFunction;
+
+typedef struct Descriptor
+{
+    DescriptorType type;
+    union
+    {
+        DescriptorFunction function;
+    };
+} Descriptor;
+
+typedef struct Value
+{
+    Descriptor descriptor;
+    Operand operand;
+} Value;
 
 #define reg_init(reg_index, reg_size) { .type = OperandType_Register, .size = reg_size, .reg = reg_index, }
 #define define_register(reg_name, reg_index, reg_size)\
@@ -1731,73 +1761,99 @@ void test_main(s32 argc, char* argv[])
 
 typedef struct FunctionBuilder
 {
+    DescriptorFunction descriptor;
     ExecutionBuffer eb;
     s32 stack_offset;
     u8 next_arg;
 } FunctionBuilder;
 
-Operand declare_variable(FunctionBuilder* fn, s32 size)
+Operand declare_variable(FunctionBuilder* fn_builder, s32 size)
 {
-    fn->stack_offset -= size;
+    fn_builder->stack_offset -= size;
 
-    return stack(fn->stack_offset, size);
+    return stack(fn_builder->stack_offset, size);
 }
 
-void assign(FunctionBuilder* fn, Operand a, Operand b)
+void assign(FunctionBuilder* fn_builder, Operand a, Operand b)
 {
-    encode(&fn->eb, (Instruction) { mov, {a, b} });
+    encode(&fn_builder->eb, (Instruction) { mov, {a, b} });
 }
 
-Operand do_add(FunctionBuilder* fn, Operand a, Operand b)
+Operand do_add(FunctionBuilder* fn_builder, Operand a, Operand b)
 {
-    encode(&fn->eb, (Instruction) { add, { a, b } });
+    encode(&fn_builder->eb, (Instruction) { add, { a, b } });
     return a;
 }
 
 FunctionBuilder fn_begin(void)
 {
-    FunctionBuilder fn = {.eb = give_me(1024) };
-    encode(&fn.eb, (Instruction) { push, { reg.rbp } });
-    encode(&fn.eb, (Instruction) { mov, { reg.rbp, reg.rsp } });
+    FunctionBuilder fn_builder = {.eb = give_me(1024) };
 
-    return fn;
+    fn_builder.descriptor.arguments = malloc(sizeof(Value) * array_length(parameter_registers));
+    fn_builder.descriptor.return_value = malloc(sizeof(Value));
+    encode(&fn_builder.eb, (Instruction) { push, { reg.rbp } });
+    encode(&fn_builder.eb, (Instruction) { mov, { reg.rbp, reg.rsp } });
+
+    return fn_builder;
 }
 
-void fn_return(FunctionBuilder* fn, Operand to_return)
+Value fn_arg(FunctionBuilder* fn_builder, Descriptor arg_descriptor)
 {
-    Operand ret_reg = reg.arr[register_size_jump_table[to_return.size]][return_registers[0]];
-
-    if (memcmp(&ret_reg, &to_return, sizeof(to_return)) != 0)
+    redassert(fn_builder->next_arg < array_length(parameter_registers));
+    // @TODO: hardcoded 64-bit register
+    u32 size_index = register_size_jump_table[OperandSize_64];
+    u32 register_index = parameter_registers[fn_builder->next_arg];
+    Value arg = 
     {
-        encode(&fn->eb, (Instruction) { mov, { ret_reg, to_return }});
-    }
+        .descriptor = arg_descriptor,
+        .operand = reg.arr[size_index][register_index],
+    };
 
-    encode(&fn->eb, (Instruction) { pop, { reg.rbp } });
-    encode(&fn->eb, (Instruction) { ret });
-}
-
-Operand fn_arg(FunctionBuilder* fn, u64 byte_size)
-{
-    redassert(fn->next_arg < array_length(parameter_registers));
-    Operand arg = reg.arr[register_size_jump_table[byte_size]][parameter_registers[fn->next_arg]];
-    fn->next_arg++;
+    fn_builder->next_arg++;
     return arg;
 };
 
+Value fn_end(FunctionBuilder* fn_builder)
+{
+    fn_builder->descriptor.argument_count = fn_builder->next_arg;
+    return (const Value)
+    {
+        .descriptor = (const Descriptor) {.type = Function, .function = fn_builder->descriptor},
+        .operand = imm64((u64)fn_builder->eb.ptr),
+    };
+}
+
+void fn_return(FunctionBuilder* fn_builder, Value to_return)
+{
+    *fn_builder->descriptor.return_value = to_return;
+    // @TODO: hardcoded 64-bit register
+    u32 size_index = register_size_jump_table[OperandSize_64];
+    u32 register_index = return_registers[0];
+    Operand ret_reg = reg.arr[size_index][register_index];
+
+    if (memcmp(&ret_reg, &to_return, sizeof(to_return)) != 0)
+    {
+        encode(&fn_builder->eb, (Instruction) { mov, { ret_reg, to_return.operand }});
+    }
+
+    encode(&fn_builder->eb, (Instruction) { pop, { reg.rbp } });
+    encode(&fn_builder->eb, (Instruction) { ret });
+}
+
 void test_abstract_fn()
 {
-    FunctionBuilder fn = fn_begin();
-    Operand var = declare_variable(&fn, 4);
-    assign(&fn, var, reg.edi);
-    assign(&fn, reg.eax, var);
-    Operand add_result = do_add(&fn, reg.eax, var);
-    fn_return(&fn, add_result);
+    FunctionBuilder fn_builder = fn_begin();
+    Operand var = declare_variable(&fn_builder, 4);
+    assign(&fn_builder, var, reg.edi);
+    assign(&fn_builder, reg.eax, var);
+    Operand add_result = do_add(&fn_builder, reg.eax, var);
+    fn_return(&fn_builder, (const Value) { .descriptor = { .type = Integer }, .operand = add_result });
 
     u8 expected[] = { 0x55, 0x48, 0x89, 0xe5, 0x89, 0x7d, 0xfc, 0x8b, 0x45, 0xfc, 0x03, 0x45, 0xfc, 0x5d, 0xc3 };
-    test_buffer(&fn.eb, expected, array_length(expected), __func__);
+    test_buffer(&fn_builder.eb, expected, array_length(expected), __func__);
 
     typedef int SumFn(int);
-    SumFn* sum = (SumFn*) fn.eb.ptr;
+    SumFn* sum = (SumFn*) fn_builder.eb.ptr;
     int n = 5;
     int result = sum(n);
     print("Result %d\n", result);
@@ -1808,12 +1864,12 @@ typedef s32 RetS32(void);
 
 RetS32* make_ret_s32(void)
 {
-    FunctionBuilder fn = fn_begin();
-    Operand var = declare_variable(&fn, 4);
-    assign(&fn, var, imm32(18293));
-    fn_return(&fn, var);
+    FunctionBuilder fn_builder = fn_begin();
+    Operand var = declare_variable(&fn_builder, 4);
+    assign(&fn_builder, var, imm32(18293));
+    fn_return(&fn_builder, (const Value) {.descriptor = { .type = Integer}, .operand = var });
 
-    return (RetS32*)fn.eb.ptr;
+    return (RetS32*)fn_builder.eb.ptr;
 }
 
 typedef s32 ProxyFn(RetS32);
@@ -1821,12 +1877,12 @@ typedef s32 ProxyFn(RetS32);
 // This can implement simple lambdas
 void test_proxy_fn(void)
 {
-    FunctionBuilder fn = fn_begin();
-    encode(&fn.eb, (Instruction) {call, {reg.rdi}});
-    fn_return(&fn, reg.rax);
+    FunctionBuilder fn_builder = fn_begin();
+    encode(&fn_builder.eb, (Instruction) {call, {reg.rdi}});
+    fn_return(&fn_builder, (const Value) {.descriptor = {.type = Integer}, .operand = reg.rax });
 
     RetS32* ret_s32 = make_ret_s32();
-    ProxyFn* proxy_fn = (ProxyFn*)fn.eb.ptr;
+    ProxyFn* proxy_fn = (ProxyFn*)fn_builder.eb.ptr;
     s32 result = proxy_fn(ret_s32);
     print("Result: %d\n", result);
 }
@@ -1839,41 +1895,92 @@ typedef struct LabelPatch
     s64 ip;
 } LabelPatch;
 
-LabelPatch make_jnz(FunctionBuilder* fn)
+LabelPatch make_jnz(FunctionBuilder* fn_builder)
 {
-    encode(&fn->eb, (Instruction) { jnz, { rel8(0xcc) } });
-    s64 ip = fn->eb.len;
-    u8* patch = &fn->eb.ptr[ip - 1];
+    encode(&fn_builder->eb, (Instruction) { jnz, { rel8(0xcc) } });
+    s64 ip = fn_builder->eb.len;
+    u8* patch = &fn_builder->eb.ptr[ip - 1];
 
     return (LabelPatch) { patch, ip };
 }
 
-void make_jump_label(FunctionBuilder* fn, LabelPatch patch)
+void make_jump_label(FunctionBuilder* fn_builder, LabelPatch patch)
 {
-    u8 diff = (fn->eb.len - patch.ip);
+    u8 diff = (fn_builder->eb.len - patch.ip);
     redassert(diff <= 0x80);
     *patch.address = diff;
 }
 
+Value fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
+{
+    redassert(fn->descriptor.type == Function);
+    redassert(fn->descriptor.function.arguments);
+    redassert(fn->descriptor.function.argument_count == arg_count);
+    // @TODO: type-check arguments
+    u32 size_index = register_size_jump_table[OperandSize_64];
+    for (s64 i = 0; i < arg_count; i++)
+    {
+        u32 register_index_param = parameter_registers[i];
+        Operand param_reg = reg.arr[size_index][register_index_param];
+        encode(&fn_builder->eb, (Instruction) {mov, {param_reg, arg_list[i].operand }});
+    }
+
+    encode(&fn_builder->eb, (Instruction) {mov, {reg.rax, fn->operand }});
+    encode(&fn_builder->eb, (Instruction) {call, {reg.rax}});
+
+    return *fn->descriptor.function.return_value;
+}
+
 void make_is_non_zero(void)
 {
-    FunctionBuilder fn = fn_begin();
-    Operand n = fn_arg(&fn, sizeof(s32));
-    print("%d\n", n.reg);
-    encode(&fn.eb, (Instruction) { cmp, { n, imm32(0) } });
-    LabelPatch patch = make_jnz(&fn);
-    fn_return(&fn, imm32(0));
-    make_jump_label(&fn, patch);
-    fn_return(&fn, imm32(1));
+    FunctionBuilder fn_builder = fn_begin();
+    Value n = fn_arg(&fn_builder, (const Descriptor) {.type = Integer, });
+    encode(&fn_builder.eb, (Instruction) { cmp, { n.operand, imm32(0) } });
+    LabelPatch patch = make_jnz(&fn_builder);
+    fn_return(&fn_builder, (const Value) {.descriptor = {.type = Integer,}, .operand = imm32(0)} );
+    make_jump_label(&fn_builder, patch);
+    fn_return(&fn_builder, (const Value) {.descriptor = {.type = Integer,}, .operand = imm32(1)});
 
-    s32_s32* function = (s32_s32*)fn.eb.ptr;
+    s32_s32* function = (s32_s32*)fn_builder.eb.ptr;
     print("Should be 0: %d\n", function(0));
     print("Should be 1: %d\n", function(-128391));
 }
 
+Value make_partial_application_s64(Value* original_fn, s64 arg)
+{
+    FunctionBuilder fn_builder = fn_begin();
+    Value applied_arg0 = 
+    {
+        .descriptor = {.type = Integer},
+        .operand = imm64(arg),
+    };
+
+    Value result = fn_call(&fn_builder, original_fn, &applied_arg0, 1);
+    fn_return(&fn_builder, result);
+
+    return fn_end(&fn_builder);
+}
+
+Value make_identity_s64()
+{
+    FunctionBuilder fn_builder = fn_begin();
+    Value arg0 = fn_arg(&fn_builder, (const Descriptor) { .type = Integer });
+    fn_return(&fn_builder, arg0);
+    return fn_end(&fn_builder);
+}
+
+typedef s64 (fn_type_void_to_s64)(void);
+void make_simple_lambda(void)
+{
+    Value id_value = make_identity_s64();
+    Value partial_fn_value = make_partial_application_s64(&id_value, 42);
+    fn_type_void_to_s64* result_fn = (fn_type_void_to_s64*)partial_fn_value.operand.imm._64;
+    s64 result = result_fn();
+    redassert (result == 42);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    make_is_non_zero();
 }
 
 s32 main(s32 argc, char* argv[])
