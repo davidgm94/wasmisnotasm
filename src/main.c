@@ -26,10 +26,10 @@ typedef s64 make_increment_s64(s64);
 typedef enum OperandSize
 {
     OperandSize_Any = 0,
-    OperandSize_8 = 8,
-    OperandSize_16 = 16,
-    OperandSize_32 = 32,
-    OperandSize_64 = 64,
+    OperandSize_8 = 1,
+    OperandSize_16 = 2,
+    OperandSize_32 = 4,
+    OperandSize_64 = 8,
 } OperandSize;
 
 typedef enum OperandType
@@ -38,7 +38,6 @@ typedef enum OperandType
     OperandType_Register,
     OperandType_Immediate,
     OperandType_MemoryIndirect,
-    OperandType_MemoryDirect,
     OperandType_RIP_Relative,
 } OperandType;
 
@@ -159,76 +158,76 @@ typedef struct Operand
     const Operand reg_name = reg_init(reg_index, reg_size)
 
 /* 64-bit registers */
-define_register(rax,    Register_A, 64);
-define_register(rcx,    Register_C, 64);
-define_register(rdx,    Register_D, 64);
-define_register(rbx,    Register_B, 64);
-define_register(rsp,    Register_SP, 64);
-define_register(rbp,    Register_BP, 64);
-define_register(rsi,    Register_SI, 64);
-define_register(rdi,    Register_DI, 64);
-define_register(r8,     Register_8, 64);
-define_register(r9,     Register_9, 64);
-define_register(r10,    Register_10, 64);
-define_register(r11,    Register_11, 64);
-define_register(r12,    Register_12, 64);
-define_register(r13,    Register_13, 64);
-define_register(r14,    Register_14, 64);
-define_register(r15,    Register_15, 64);
+define_register(rax,    Register_A, 8);
+define_register(rcx,    Register_C, 8);
+define_register(rdx,    Register_D, 8);
+define_register(rbx,    Register_B, 8);
+define_register(rsp,    Register_SP, 8);
+define_register(rbp,    Register_BP, 8);
+define_register(rsi,    Register_SI, 8);
+define_register(rdi,    Register_DI, 8);
+define_register(r8,     Register_8, 8);
+define_register(r9,     Register_9, 8);
+define_register(r10,    Register_10, 8);
+define_register(r11,    Register_11, 8);
+define_register(r12,    Register_12, 8);
+define_register(r13,    Register_13, 8);
+define_register(r14,    Register_14, 8);
+define_register(r15,    Register_15, 8);
 
 /* 32-bit registers */
-define_register(eax,    Register_A, 32);
-define_register(ecx,    Register_C, 32);
-define_register(edx,    Register_D, 32);
-define_register(ebx,    Register_B, 32);
-define_register(esp,    Register_SP, 32);
-define_register(ebp,    Register_BP, 32);
-define_register(esi,    Register_SI, 32);
-define_register(edi,    Register_DI, 32);
-define_register(r8d,    Register_8,  32);
-define_register(r9d,    Register_9,  32);
-define_register(r10d,   Register_10, 32);
-define_register(r11d,   Register_11, 32);
-define_register(r12d,   Register_12, 32);
-define_register(r13d,   Register_13, 32);
-define_register(r14d,   Register_14, 32);
-define_register(r15d,   Register_15, 32);
+define_register(eax,    Register_A, 4);
+define_register(ecx,    Register_C, 4);
+define_register(edx,    Register_D, 4);
+define_register(ebx,    Register_B, 4);
+define_register(esp,    Register_SP, 4);
+define_register(ebp,    Register_BP, 4);
+define_register(esi,    Register_SI, 4);
+define_register(edi,    Register_DI, 4);
+define_register(r8d,    Register_8,  4);
+define_register(r9d,    Register_9,  4);
+define_register(r10d,   Register_10, 4);
+define_register(r11d,   Register_11, 4);
+define_register(r12d,   Register_12, 4);
+define_register(r13d,   Register_13, 4);
+define_register(r14d,   Register_14, 4);
+define_register(r15d,   Register_15, 4);
 
 /* 16-bit registers */
-define_register(ax,     Register_A,  16);
-define_register(cx,     Register_C,  16);
-define_register(dx,     Register_D,  16);
-define_register(bx,     Register_B,  16);
-define_register(sp,     Register_SP, 16);
-define_register(bp,     Register_BP, 16);
-define_register(si,     Register_SI, 16);
-define_register(di,     Register_DI, 16);
-define_register(r8w,    Register_8,  16);
-define_register(r9w,    Register_9,  16);
-define_register(r10w,   Register_10, 16);
-define_register(r11w,   Register_11, 16);
-define_register(r12w,   Register_12, 16);
-define_register(r13w,   Register_13, 16);
-define_register(r14w,   Register_14, 16);
-define_register(r15w,   Register_15, 16);
+define_register(ax,     Register_A,  2);
+define_register(cx,     Register_C,  2);
+define_register(dx,     Register_D,  2);
+define_register(bx,     Register_B,  2);
+define_register(sp,     Register_SP, 2);
+define_register(bp,     Register_BP, 2);
+define_register(si,     Register_SI, 2);
+define_register(di,     Register_DI, 2);
+define_register(r8w,    Register_8,  2);
+define_register(r9w,    Register_9,  2);
+define_register(r10w,   Register_10, 2);
+define_register(r11w,   Register_11, 2);
+define_register(r12w,   Register_12, 2);
+define_register(r13w,   Register_13, 2);
+define_register(r14w,   Register_14, 2);
+define_register(r15w,   Register_15, 2);
 
 /* 8-bit registers */
-define_register(al,     Register_A,  8);
-define_register(cl,     Register_C,  8);
-define_register(dl,     Register_D,  8);
-define_register(bl,     Register_B,  8);
-define_register(ah,     Register_AH, 8);
-define_register(ch,     Register_CH, 8);
-define_register(dh,     Register_DH, 8);
-define_register(bh,     Register_BH, 8);
-define_register(r8b,    Register_8,  8);
-define_register(r9b,    Register_9,  8);
-define_register(r10b,   Register_10, 8);
-define_register(r11b,   Register_11, 8);
-define_register(r12b,   Register_12, 8);
-define_register(r13b,   Register_13, 8);
-define_register(r14b,   Register_14, 8);
-define_register(r15b,   Register_15, 8);
+define_register(al,     Register_A,  1);
+define_register(cl,     Register_C,  1);
+define_register(dl,     Register_D,  1);
+define_register(bl,     Register_B,  1);
+define_register(ah,     Register_AH, 1);
+define_register(ch,     Register_CH, 1);
+define_register(dh,     Register_DH, 1);
+define_register(bh,     Register_BH, 1);
+define_register(r8b,    Register_8,  1);
+define_register(r9b,    Register_9,  1);
+define_register(r10b,   Register_10, 1);
+define_register(r11b,   Register_11, 1);
+define_register(r12b,   Register_12, 1);
+define_register(r13b,   Register_13, 1);
+define_register(r14b,   Register_14, 1);
+define_register(r15b,   Register_15, 1);
 
 #ifdef MSVC_x86_64
 const Register parameter_registers[] =
@@ -340,7 +339,7 @@ static inline Operand stack(s32 offset)
     };
 }
 #else
-static inline Operand stack(s32 offset)
+static inline Operand stack(s32 offset, s32 size)
 {
     return (const Operand)
     {
@@ -350,6 +349,7 @@ static inline Operand stack(s32 offset)
             .reg = rbp.reg,
             .displacement = offset,
         },
+        .size = size,
     };
 }
 #endif
@@ -537,7 +537,12 @@ const InstructionEncoding btc_encoding[] = { 0 };
 const InstructionEncoding btr_encoding[] = { 0 };
 const InstructionEncoding bts_encoding[] = { 0 };
 const InstructionEncoding bzhi_encoding[] = { 0 };
-const InstructionEncoding call_encoding[] = { 0 };
+const InstructionEncoding call_encoding[] =
+{
+    ENCODING(0xFF, ENC_OPTS(.type = Digit, .digit = 2),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 64))),
+    ),
+};
 const InstructionEncoding cbw_encoding[] = { 0 };
 const InstructionEncoding cwde_encoding[] = { 0 };
 const InstructionEncoding cdqe_encoding[] = { 0 };
@@ -827,6 +832,7 @@ const InstructionEncoding xtest_encoding[] = { 0 };
 
 define_mnemonic(adc);
 define_mnemonic(add);
+define_mnemonic(call);
 define_mnemonic(mov);
 define_mnemonic(pop);
 define_mnemonic(push);
@@ -1141,7 +1147,7 @@ static void test_adc_r64_m64(void* s)
 {
     u32 n = 0xfffffff;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {rbx, stack(n)}});
+    encode(&eb, (Instruction) {adc, {rbx, stack(n, sizeof(n))}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x48);
@@ -1167,6 +1173,7 @@ static bool test_instruction(const char* test_name, Instruction instruction, u8*
     }
     return test_buffer(&eb, expected.ptr, expected.len, test_name);
 }
+
 #define TEST(test_name, _instr, _test_bytes)\
     u8 expected_bytes_ ## test_name [] = { _test_bytes };\
     test_instruction(#test_name, _instr, expected_bytes_ ## test_name, array_length(expected_bytes_ ## test_name )
@@ -1181,6 +1188,7 @@ void test_main(s32 argc, char* argv[])
     TEST(add_rm16_imm16, INSTR(add, { bx, imm16(0xffff) }), EXPECTED(0x66, 0x81, 0xc3, 0xff, 0xff)));
     TEST(add_rm32_imm32, INSTR(add, { ebx, imm32(0xffffffff) }), EXPECTED(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
     TEST(add_rm64_imm32, INSTR(add, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(call_r64, INSTR(call, { rax }), EXPECTED(0xff, 0xd0)));
     TEST(mov_bl_cl, INSTR(mov, { bl, cl }), EXPECTED(0x88, 0xcb)));
     TEST(mov_bx_cx, INSTR(mov, { bx, cx }), EXPECTED(0x66, 0x89, 0xcb)));
     TEST(mov_ebx_ecx, INSTR(mov, { ebx, ecx }), EXPECTED(0x89, 0xcb)));
@@ -1195,32 +1203,124 @@ void test_main(s32 argc, char* argv[])
     TEST(mov_r32_imm32, INSTR(mov, { ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff)));
     TEST(mov_r64_imm64, INSTR(mov, { rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
     TEST(mov_rm64_imm32, INSTR(mov, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack(-8), rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
-    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { rax, stack(-8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
+    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack(-8, 8), rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
+    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { rax, stack(-8, 8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
     TEST(pop_r64, INSTR(pop, { rbp }), EXPECTED(0x5d)));
     TEST(push_r64, INSTR(push, { rbp }), EXPECTED(0x55)));
 }
 
-void wna_main(s32 argc, char* argv[])
+typedef struct Function
 {
-    ExecutionBuffer eb = give_me(1024);
-    encode(&eb, (Instruction) { push, { rbp } });
-    encode(&eb, (Instruction) { mov, { rbp, rsp } });
-    encode(&eb, (Instruction) { mov, { stack(-4), edi } });
-    encode(&eb, (Instruction) { mov, { eax, stack(-4) } });
-    encode(&eb, (Instruction) { add, { eax, stack(-4) } });
-    encode(&eb, (Instruction) { pop, { rbp } });
-    encode(&eb, (Instruction) { ret });
+    ExecutionBuffer eb;
+    s32 stack_offset;
+    u32 arg_count;
+} Function;
+
+Operand declare_variable(Function* fn, s32 size)
+{
+    fn->stack_offset -= size;
+
+    return stack(fn->stack_offset, size);
+}
+
+void assign(Function* fn, Operand a, Operand b)
+{
+    encode(&fn->eb, (Instruction) { mov, {a, b} });
+}
+
+Operand do_add(Function* fn, Operand a, Operand b)
+{
+    encode(&fn->eb, (Instruction) { add, { a, b } });
+    return a;
+}
+
+Function fn_begin(void)
+{
+    Function fn = {.eb = give_me(1024) };
+    encode(&fn.eb, (Instruction) { push, { rbp } });
+    encode(&fn.eb, (Instruction) { mov, { rbp, rsp } });
+
+    return fn;
+}
+
+void fn_return(Function* fn, Operand to_return)
+{
+    Operand ret_reg;
+
+    switch (to_return.size)
+    {
+        case OperandSize_8:
+            ret_reg = al;
+            break;
+        case OperandSize_16:
+            ret_reg = ax;
+            break;
+        case OperandSize_32:
+            ret_reg = eax;
+            break;
+        case OperandSize_64:
+            ret_reg = rax;
+            break;
+        default:
+            RED_UNREACHABLE;
+            break;
+    }
+
+    if (memcmp(&ret_reg, &to_return, sizeof(to_return)) != 0)
+    {
+        encode(&fn->eb, (Instruction) { mov, { ret_reg, to_return }});
+    }
+
+    encode(&fn->eb, (Instruction) { pop, { rbp } });
+    encode(&fn->eb, (Instruction) { ret });
+}
+
+void test_abstract_fn()
+{
+    Function fn = fn_begin();
+    Operand var = declare_variable(&fn, 4);
+    assign(&fn, var, edi);
+    assign(&fn, eax, var);
+    Operand add_result = do_add(&fn, eax, var);
+    fn_return(&fn, add_result);
 
     u8 expected[] = { 0x55, 0x48, 0x89, 0xe5, 0x89, 0x7d, 0xfc, 0x8b, 0x45, 0xfc, 0x03, 0x45, 0xfc, 0x5d, 0xc3 };
-    test_buffer(&eb, expected, array_length(expected), __func__);
+    test_buffer(&fn.eb, expected, array_length(expected), __func__);
 
     typedef int SumFn(int);
-    SumFn* sum = (SumFn*) eb.ptr;
+    SumFn* sum = (SumFn*) fn.eb.ptr;
     int n = 5;
     int result = sum(n);
     print("Result %d\n", result);
     print("Expected %d\n", n + n);
+}
+
+
+
+typedef s32 RetS32(void);
+
+RetS32* make_ret_s32(void)
+{
+    Function fn = fn_begin();
+    Operand var = declare_variable(&fn, 4);
+    assign(&fn, var, imm32(18293));
+    fn_return(&fn, var);
+
+    return (RetS32*)fn.eb.ptr;
+}
+
+typedef s32 ProxyFn(RetS32);
+
+void wna_main(s32 argc, char* argv[])
+{
+    Function fn = fn_begin();
+    encode(&fn.eb, (Instruction) {call, {rdi}});
+    fn_return(&fn, rax);
+
+    RetS32* ret_s32 = make_ret_s32();
+    ProxyFn* proxy_fn = (ProxyFn*)fn.eb.ptr;
+    s32 result = proxy_fn(ret_s32);
+    print("Result: %d\n", result);
 }
 
 s32 main(s32 argc, char* argv[])
