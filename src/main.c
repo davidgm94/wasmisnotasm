@@ -17,7 +17,7 @@
 #endif
 #endif
 
-#define TEST_MODE 0
+#define TEST_MODE 1
 
 typedef s64 square_fn(s64);
 typedef s64 mul_fn(s64, s64);
@@ -29,7 +29,9 @@ typedef enum OperandSize
     OperandSize_8 = 1,
     OperandSize_16 = 2,
     OperandSize_32 = 4,
+    OperandSize_48 = 6,
     OperandSize_64 = 8,
+    OperandSize_80 = 10,
 } OperandSize;
 
 typedef enum OperandType
@@ -38,7 +40,7 @@ typedef enum OperandType
     OperandType_Register,
     OperandType_Immediate,
     OperandType_MemoryIndirect,
-    OperandType_RIP_Relative,
+    OperandType_Relative,
 } OperandType;
 
 typedef enum SIBScale
@@ -96,6 +98,11 @@ typedef enum Register
     Register_15 = 15,
 } Register;
 
+enum 
+{
+    Register_N_Flag = 0b1000,
+};
+
 const char* register_to_string(Register r)
 {
     switch (r)
@@ -140,6 +147,24 @@ typedef union OperandImmediate
     u64 _64;
 } OperandImmediate;
 
+typedef union OperandRelative
+{
+    u8  _8;
+    u16 _16;
+    u32 _32;
+    struct
+    {
+        u32 first;
+        u16 second;
+    } _48;
+    u64 _64;
+    struct
+    {
+        u64 first;
+        u16 second;
+    } _80;
+} OperandRelative;
+
 typedef struct Operand
 {
     OperandType type;
@@ -149,87 +174,114 @@ typedef struct Operand
         Register reg;
         OperandImmediate imm;
         OperandMemoryIndirect mem_indirect;
-        OperandMemoryDirect memory;
+        OperandRelative rel;
     };
 } Operand;
 
 #define reg_init(reg_index, reg_size) { .type = OperandType_Register, .size = reg_size, .reg = reg_index, }
 #define define_register(reg_name, reg_index, reg_size)\
-    const Operand reg_name = reg_init(reg_index, reg_size)
+    .reg_name = reg_init(reg_index, reg_size)
 
-/* 64-bit registers */
-define_register(rax,    Register_A, 8);
-define_register(rcx,    Register_C, 8);
-define_register(rdx,    Register_D, 8);
-define_register(rbx,    Register_B, 8);
-define_register(rsp,    Register_SP, 8);
-define_register(rbp,    Register_BP, 8);
-define_register(rsi,    Register_SI, 8);
-define_register(rdi,    Register_DI, 8);
-define_register(r8,     Register_8, 8);
-define_register(r9,     Register_9, 8);
-define_register(r10,    Register_10, 8);
-define_register(r11,    Register_11, 8);
-define_register(r12,    Register_12, 8);
-define_register(r13,    Register_13, 8);
-define_register(r14,    Register_14, 8);
-define_register(r15,    Register_15, 8);
+u8 register_size_jump_table[] =
+{
+    [OperandSize_64] = 0,
+    [OperandSize_32] = 1,
+    [OperandSize_16] = 2,
+    [OperandSize_8]  = 1,
+};
 
-/* 32-bit registers */
-define_register(eax,    Register_A, 4);
-define_register(ecx,    Register_C, 4);
-define_register(edx,    Register_D, 4);
-define_register(ebx,    Register_B, 4);
-define_register(esp,    Register_SP, 4);
-define_register(ebp,    Register_BP, 4);
-define_register(esi,    Register_SI, 4);
-define_register(edi,    Register_DI, 4);
-define_register(r8d,    Register_8,  4);
-define_register(r9d,    Register_9,  4);
-define_register(r10d,   Register_10, 4);
-define_register(r11d,   Register_11, 4);
-define_register(r12d,   Register_12, 4);
-define_register(r13d,   Register_13, 4);
-define_register(r14d,   Register_14, 4);
-define_register(r15d,   Register_15, 4);
+#define register_count_per_size 16
+union
+{
+    Operand arr[array_length(register_size_jump_table)][register_count_per_size];
+    struct
+    {
+        /* 64-bit registers */
+        Operand rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8, r9, r10, r11, r12, r13, r14, r15;
+        /* 32-bit registers */
+        Operand eax, ecx, edx, ebx, esp, ebp, esi, edi, r8d, r9d, r10d, r11d, r12d, r13d, r14d, r15d;
+        /* 16-bit registers */
+        Operand ax, cx, dx, bx, sp, bp, si, di, r8w, r9w, r10w, r11w, r12w, r13w, r14w, r15w;
+        /* 8-bit registers */
+        Operand al, cl, dl, bl, ah, ch, dh, bh, r8b, r9b, r10b, r11b, r12b, r13b, r14b, r15b;
+    };
+} reg =
+{
+    /* 64-bit registers */
+    define_register(rax,    Register_A,  8),
+    define_register(rcx,    Register_C,  8),
+    define_register(rdx,    Register_D,  8),
+    define_register(rbx,    Register_B,  8),
+    define_register(rsp,    Register_SP, 8),
+    define_register(rbp,    Register_BP, 8),
+    define_register(rsi,    Register_SI, 8),
+    define_register(rdi,    Register_DI, 8),
+    define_register(r8,     Register_8,  8),
+    define_register(r9,     Register_9,  8),
+    define_register(r10,    Register_10, 8),
+    define_register(r11,    Register_11, 8),
+    define_register(r12,    Register_12, 8),
+    define_register(r13,    Register_13, 8),
+    define_register(r14,    Register_14, 8),
+    define_register(r15,    Register_15, 8),
 
-/* 16-bit registers */
-define_register(ax,     Register_A,  2);
-define_register(cx,     Register_C,  2);
-define_register(dx,     Register_D,  2);
-define_register(bx,     Register_B,  2);
-define_register(sp,     Register_SP, 2);
-define_register(bp,     Register_BP, 2);
-define_register(si,     Register_SI, 2);
-define_register(di,     Register_DI, 2);
-define_register(r8w,    Register_8,  2);
-define_register(r9w,    Register_9,  2);
-define_register(r10w,   Register_10, 2);
-define_register(r11w,   Register_11, 2);
-define_register(r12w,   Register_12, 2);
-define_register(r13w,   Register_13, 2);
-define_register(r14w,   Register_14, 2);
-define_register(r15w,   Register_15, 2);
+    /* 32-bit registers */
+    define_register(eax,    Register_A,  4),
+    define_register(ecx,    Register_C,  4),
+    define_register(edx,    Register_D,  4),
+    define_register(ebx,    Register_B,  4),
+    define_register(esp,    Register_SP, 4),
+    define_register(ebp,    Register_BP, 4),
+    define_register(esi,    Register_SI, 4),
+    define_register(edi,    Register_DI, 4),
+    define_register(r8d,    Register_8,  4),
+    define_register(r9d,    Register_9,  4),
+    define_register(r10d,   Register_10, 4),
+    define_register(r11d,   Register_11, 4),
+    define_register(r12d,   Register_12, 4),
+    define_register(r13d,   Register_13, 4),
+    define_register(r14d,   Register_14, 4),
+    define_register(r15d,   Register_15, 4),
 
-/* 8-bit registers */
-define_register(al,     Register_A,  1);
-define_register(cl,     Register_C,  1);
-define_register(dl,     Register_D,  1);
-define_register(bl,     Register_B,  1);
-define_register(ah,     Register_AH, 1);
-define_register(ch,     Register_CH, 1);
-define_register(dh,     Register_DH, 1);
-define_register(bh,     Register_BH, 1);
-define_register(r8b,    Register_8,  1);
-define_register(r9b,    Register_9,  1);
-define_register(r10b,   Register_10, 1);
-define_register(r11b,   Register_11, 1);
-define_register(r12b,   Register_12, 1);
-define_register(r13b,   Register_13, 1);
-define_register(r14b,   Register_14, 1);
-define_register(r15b,   Register_15, 1);
+    /* 16-bit registers */
+    define_register(ax,     Register_A,  2),
+    define_register(cx,     Register_C,  2),
+    define_register(dx,     Register_D,  2),
+    define_register(bx,     Register_B,  2),
+    define_register(sp,     Register_SP, 2),
+    define_register(bp,     Register_BP, 2),
+    define_register(si,     Register_SI, 2),
+    define_register(di,     Register_DI, 2),
+    define_register(r8w,    Register_8,  2),
+    define_register(r9w,    Register_9,  2),
+    define_register(r10w,   Register_10, 2),
+    define_register(r11w,   Register_11, 2),
+    define_register(r12w,   Register_12, 2),
+    define_register(r13w,   Register_13, 2),
+    define_register(r14w,   Register_14, 2),
+    define_register(r15w,   Register_15, 2),
+
+    /* 8-bit registers */
+    define_register(al,     Register_A,  1),
+    define_register(cl,     Register_C,  1),
+    define_register(dl,     Register_D,  1),
+    define_register(bl,     Register_B,  1),
+    define_register(ah,     Register_AH, 1),
+    define_register(ch,     Register_CH, 1),
+    define_register(dh,     Register_DH, 1),
+    define_register(bh,     Register_BH, 1),
+    define_register(r8b,    Register_8,  1),
+    define_register(r9b,    Register_9,  1),
+    define_register(r10b,   Register_10, 1),
+    define_register(r11b,   Register_11, 1),
+    define_register(r12b,   Register_12, 1),
+    define_register(r13b,   Register_13, 1),
+    define_register(r14b,   Register_14, 1),
+    define_register(r15b,   Register_15, 1),
+};
 
 #ifdef MSVC_x86_64
+
 const Register parameter_registers[] =
 {
     Register_C,
@@ -237,10 +289,12 @@ const Register parameter_registers[] =
     Register_8,
     Register_9,
 };
+
 const Register return_registers[] =
 {
     Register_A,
 };
+
 const Register scratch_registers[] =
 {
     Register_A,
@@ -251,6 +305,7 @@ const Register scratch_registers[] =
     Register_10,
     Register_11,
 };
+
 const Register preserved_registers[] =
 {
     Register_B,
@@ -263,7 +318,9 @@ const Register preserved_registers[] =
     Register_14,
     Register_15,
 };
+
 #elif defined(SYSTEM_V_x86_64)
+
 const Register parameter_registers[] =
 {
     Register_DI,
@@ -273,11 +330,13 @@ const Register parameter_registers[] =
     Register_8,
     Register_9,
 };
+
 const Register return_registers[] =
 {
     Register_A,
     Register_D,
 };
+
 const Register scratch_registers[] =
 {
     Register_A,
@@ -290,6 +349,7 @@ const Register scratch_registers[] =
     Register_10,
     Register_11,
 };
+
 const Register preserved_registers[] =
 {
     Register_B,
@@ -300,6 +360,7 @@ const Register preserved_registers[] =
     Register_14,
     Register_15,
 };
+
 #endif
 
 #define _imm(n, v) { .type = OperandType_Immediate, .imm._ ## n = v, .size = OperandSize_ ## n, }
@@ -324,6 +385,32 @@ static inline Operand imm64(u64 value)
 }
 #undef _imm
 
+#define _rel(n, v) { .type = OperandType_Relative, .rel._ ## n = v, .size = OperandSize_ ## n, }
+static inline Operand rel8(u8 value)
+{
+    return (const Operand)_rel(8, value);
+}
+
+static inline Operand rel16(u16 value)
+{
+    return (const Operand)_rel(16, value);
+}
+
+static inline Operand rel32(u32 value)
+{
+    return (const Operand)_rel(32, value);
+}
+
+static inline Operand rel48(u64 value)
+{
+    return (const Operand)_rel(48, value);
+}
+
+static inline Operand rel64(u64 value)
+{
+    return (const Operand)_rel(64, value);
+}
+
 #if defined (MSVC_x86_64)
 static inline Operand stack(s32 offset)
 {
@@ -346,7 +433,7 @@ static inline Operand stack(s32 offset, s32 size)
         .type = OperandType_MemoryIndirect,
         .mem_indirect =
         {
-            .reg = rbp.reg,
+            .reg = reg.rbp.reg,
             .displacement = offset,
         },
         .size = size,
@@ -368,10 +455,10 @@ typedef enum OperandEncodingType
     OET_Register,
     OET_Register_A,
     OET_Register_Or_Memory,
+    OET_Relative,
     OET_Memory,
     OET_Immediate,
 } OperandEncodingType;
-
 
 typedef struct OperandEncoding
 {
@@ -399,7 +486,7 @@ typedef struct InstructionOptions
 } InstructionOptions;
 typedef struct InstructionEncoding
 {
-    u8 op_code;
+    u8 op_code[4];
     InstructionOptions options;
     OperandCombination operand_combinations[4];
 } InstructionEncoding;
@@ -417,6 +504,7 @@ typedef struct Instruction
 } Instruction;
 
 #define OP(_type, _size) { .type = _type,  .size = OperandSize_ ## _size, }
+#define OP_CODE(...) { __VA_ARGS__ }
 #define OPTS(...) __VA_ARGS__
 #define NO_OPTS .rex_byte = 0
 #define OPS(...) .operands = { __VA_ARGS__ }
@@ -426,42 +514,42 @@ typedef struct Instruction
 
 const InstructionEncoding adc_encoding[] =
 {
-    ENCODING(0x14,ENC_OPTS(0),
+    ENCODING(OP_CODE(0x14),ENC_OPTS(0),
         OP_COMB(OPTS(0),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8)))
         ),
-    ENCODING(0x15, ENC_OPTS(0),
+    ENCODING(OP_CODE(0x15), ENC_OPTS(0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
         OP_COMB(OPTS(NO_OPTS),		OPS(OP(OET_Register_A, 32), OP(OET_Immediate, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_A, 64), OP(OET_Immediate, 32))),
         ),
-    ENCODING(0x80, ENC_OPTS(.type = Digit, .digit = 2),
+    ENCODING(OP_CODE(0x80), ENC_OPTS(.type = Digit, .digit = 2),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
         OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
         ),
-    ENCODING(0x81, ENC_OPTS(.type = Digit, .digit = 2),
+    ENCODING(OP_CODE(0x81), ENC_OPTS(.type = Digit, .digit = 2),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
         ),
-    ENCODING(0x83, ENC_OPTS(.type = Digit, .digit = 2),
+    ENCODING(OP_CODE(0x83), ENC_OPTS(.type = Digit, .digit = 2),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
         ),
-    ENCODING(0x10, ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x10), ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
         OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
         ),
-    ENCODING(0x11,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x11),ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
         ),
-    ENCODING(0x12,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x12),ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
         OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
         ),
-    ENCODING(0x13,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x13),ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
@@ -473,42 +561,42 @@ const InstructionEncoding adc_encoding[] =
 const InstructionEncoding adcx_encoding[] = {0};
 const InstructionEncoding add_encoding[] =
 {
-    ENCODING(0x04,ENC_OPTS(0),
+    ENCODING(OP_CODE(0x04),ENC_OPTS(0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8))),
     ),
-    ENCODING(0x05,ENC_OPTS(0),
+    ENCODING(OP_CODE(0x05),ENC_OPTS(0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 32), OP(OET_Immediate, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_A, 64), OP(OET_Immediate, 32))),
     ),
-    ENCODING(0x80,ENC_OPTS(.type = Digit, .digit = 0),
+    ENCODING(OP_CODE(0x80),ENC_OPTS(.type = Digit, .digit = 0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory,8), OP(OET_Immediate, 8))),
         OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory,8), OP(OET_Immediate, 8))),
         ),
-    ENCODING(0x81,ENC_OPTS(.type = Digit, .digit = 0),
+    ENCODING(OP_CODE(0x81),ENC_OPTS(.type = Digit, .digit = 0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
     ),
-    ENCODING(0x83,ENC_OPTS(.type = Digit, .digit = 0),
+    ENCODING(OP_CODE(0x83),ENC_OPTS(.type = Digit, .digit = 0),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
     ),
-    ENCODING(0x00,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x00),ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
         OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
     ),
-    ENCODING(0x01,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x01),ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
         OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
     ),
-    ENCODING(0x02,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x02),ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
         OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
     ),
-    ENCODING(0x03,ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x03),ENC_OPTS(.type = Reg),
     	OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
     	OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
     	OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
@@ -539,7 +627,7 @@ const InstructionEncoding bts_encoding[] = { 0 };
 const InstructionEncoding bzhi_encoding[] = { 0 };
 const InstructionEncoding call_encoding[] =
 {
-    ENCODING(0xFF, ENC_OPTS(.type = Digit, .digit = 2),
+    ENCODING(OP_CODE(0xFF), ENC_OPTS(.type = Digit, .digit = 2),
     	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 64))),
     ),
 };
@@ -558,7 +646,50 @@ const InstructionEncoding clts_encoding[] = { 0 };
 const InstructionEncoding clwb_encoding[] = { 0 };
 const InstructionEncoding cmc_encoding[] = { 0 };
 const InstructionEncoding cmov_encoding[] = { 0 };
-const InstructionEncoding cmp_encoding[] = { 0 };
+const InstructionEncoding cmp_encoding[] =
+{
+    ENCODING(OP_CODE(0x3C), ENC_OPTS(0),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(OP_CODE(0x3D), ENC_OPTS(0),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_A, 32), OP(OET_Immediate, 32))),
+    	OP_COMB(OPTS(.rex_byte = RexW), OPS(OP(OET_Register_A, 64), OP(OET_Immediate, 32))),
+    ),
+    ENCODING(OP_CODE(0x80), ENC_OPTS(.type = Digit, .digit = 7),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
+    	OP_COMB(OPTS(.rex_byte = Rex), OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
+        ),
+    ENCODING(OP_CODE(0x81), ENC_OPTS(.type = Digit, .digit = 7),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
+    	OP_COMB(OPTS(.rex_byte = RexW), OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
+        ),
+    ENCODING(OP_CODE(0x83), ENC_OPTS(.type = Digit, .digit = 7),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
+    	OP_COMB(OPTS(.rex_byte = RexW), OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
+        ),
+    ENCODING(OP_CODE(0x38), ENC_OPTS(.type = Reg),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+    	OP_COMB(OPTS(.rex_byte = Rex), OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+        ),
+    ENCODING(OP_CODE(0x39), ENC_OPTS(.type = Reg),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
+    	OP_COMB(OPTS(.rex_byte = RexW), OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
+        ),
+    ENCODING(OP_CODE(0x3A), ENC_OPTS(.type = Reg),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+    	OP_COMB(OPTS(.rex_byte = Rex), OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+        ),
+    ENCODING(OP_CODE(0x3B), ENC_OPTS(.type = Reg),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
+    	OP_COMB(OPTS(0), OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
+    	OP_COMB(OPTS(.rex_byte = RexW), OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
+        ),
+};
+
 const InstructionEncoding cmpxchg_encoding[] = { 0 };
 const InstructionEncoding cmpxchg8b_encoding[] = { 0 };
 const InstructionEncoding cmpxchg16b_encoding[] = { 0 };
@@ -585,8 +716,295 @@ const InstructionEncoding invd_encoding[] = { 0 };
 const InstructionEncoding invlpg_encoding[] = { 0 };
 const InstructionEncoding invpcid_encoding[] = { 0 };
 const InstructionEncoding iret_encoding[] = { 0 };
-const InstructionEncoding jcc_encoding[] = { 0 };
-const InstructionEncoding jmp_encoding[] = { 0 };
+
+const InstructionEncoding ja_encoding[] =
+{
+    ENCODING(OP_CODE(0x77), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x87), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jae_encoding[] =
+{
+    ENCODING(OP_CODE(0x73), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x83), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jb_encoding[] =
+{
+    ENCODING(OP_CODE(0x72), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x82), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jbe_encoding[] =
+{
+    ENCODING(OP_CODE(0x76), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x86), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jc_encoding[] =
+{
+    ENCODING(OP_CODE(0x72), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x82), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jecxz_encoding[] =
+{
+    ENCODING(OP_CODE(0xE3), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+};
+const InstructionEncoding jrcxz_encoding[] =
+{
+    ENCODING(OP_CODE(0xE3), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+};
+const InstructionEncoding je_encoding[] =
+{
+    ENCODING(OP_CODE(0x74), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x84), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jg_encoding[] =
+{
+    ENCODING(OP_CODE(0x7F), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8F), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jge_encoding[] =
+{
+    ENCODING(OP_CODE(0x7D), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8D), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jl_encoding[] =
+{
+    ENCODING(OP_CODE(0x7C), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8C), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jle_encoding[] =
+{
+    ENCODING(OP_CODE(0x7E), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8E), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jna_encoding[] =
+{
+    ENCODING(OP_CODE(0x76), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x86), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnae_encoding[] =
+{
+    ENCODING(OP_CODE(0x72), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x82), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnb_encoding[] =
+{
+    ENCODING(OP_CODE(0x73), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x83), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnbe_encoding[] =
+{
+    ENCODING(OP_CODE(0x77), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x87), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnc_encoding[] =
+{
+    ENCODING(OP_CODE(0x73), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x83), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jne_encoding[] =
+{
+    ENCODING(OP_CODE(0x75), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x85), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jng_encoding[] =
+{
+    ENCODING(OP_CODE(0x7E), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8E), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnge_encoding[] =
+{
+    ENCODING(OP_CODE(0x7C), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8C), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnl__encoding[] =
+{
+    ENCODING(OP_CODE(0x7D), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8D), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnle_encoding[] =
+{
+    ENCODING(OP_CODE(0x7F), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8F), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jno_encoding[] =
+{
+    ENCODING(OP_CODE(0x71), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x81), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnp_encoding[] =
+{
+    ENCODING(OP_CODE(0x7B), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8B), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jns_encoding[] =
+{
+    ENCODING(OP_CODE(0x79), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x89), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jnz_encoding[] =
+{
+    ENCODING(OP_CODE(0x75), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x85), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jo_encoding[] =
+{
+    ENCODING(OP_CODE(0x70), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x80), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jp_encoding[] =
+{
+    ENCODING(OP_CODE(0x7A), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8A), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jpe_encoding[] =
+{
+    ENCODING(OP_CODE(0x7A), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8A), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jpo_encoding[] =
+{
+    ENCODING(OP_CODE(0x7B), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x8B), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding js_encoding[] =
+{
+    ENCODING(OP_CODE(0x78), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x88), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+const InstructionEncoding jz_encoding[] =
+{
+    ENCODING(OP_CODE(0x74), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 8))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0x84), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Relative, 32))),
+    ),
+};
+
+const InstructionEncoding jmp_encoding[] =
+{
+    0
+};
+
 const InstructionEncoding lar_encoding[] = { 0 };
 const InstructionEncoding lds_encoding[] = { 0 };
 const InstructionEncoding lss_encoding[] = { 0 };
@@ -616,39 +1034,39 @@ const InstructionEncoding mfence_encoding[] = { 0 };
 
 const InstructionEncoding mov_encoding[] =
 {
-    ENCODING(0x88, ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x88), ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
         OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
     ),
-    ENCODING(0x89, ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x89), ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
         OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
     ),
-    ENCODING(0x8A, ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x8A), ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
         OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
     ),
-    ENCODING(0x8B, ENC_OPTS(.type = Reg),
+    ENCODING(OP_CODE(0x8B), ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
         OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
     ),
     /*  @TODO: NOT CODED SEGMENT AND OFFSET INSTRUCTIONS */
-    ENCODING(0xB0, ENC_OPTS(.type = OpCodePlusReg),
+    ENCODING(OP_CODE(0xB0), ENC_OPTS(.type = OpCodePlusReg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 8), OP(OET_Immediate, 8))),
         OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register, 8), OP(OET_Immediate, 8))),
     ),
-    ENCODING(0xB8, ENC_OPTS(.type = OpCodePlusReg),
+    ENCODING(OP_CODE(0xB8), ENC_OPTS(.type = OpCodePlusReg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16), OP(OET_Immediate, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32), OP(OET_Immediate, 32))),
         OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Immediate, 64))),
     ),
-    ENCODING(0xC6, ENC_OPTS(.type = Digit, .digit = 0),
+    ENCODING(OP_CODE(0xC6), ENC_OPTS(.type = Digit, .digit = 0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
         OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Immediate, 8))),
     ),
-    ENCODING(0xC7, ENC_OPTS(.type = Digit, .digit = 0),
+    ENCODING(OP_CODE(0xC7), ENC_OPTS(.type = Digit, .digit = 0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
         OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
@@ -679,24 +1097,24 @@ const InstructionEncoding pdep_encoding[] = { 0 };
 const InstructionEncoding pext_encoding[] = { 0 };
 const InstructionEncoding pop_encoding[] =
 {
-    ENCODING(0x58, ENC_OPTS(.type = OpCodePlusReg),
+    ENCODING(OP_CODE(0x58), ENC_OPTS(.type = OpCodePlusReg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 64))),
     ),
-    ENCODING(0x8f, ENC_OPTS(.type = Digit, .digit = 0),
+    ENCODING(OP_CODE(0x8f), ENC_OPTS(.type = Digit, .digit = 0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 64))),
     ),
-    ENCODING(0x6A, ENC_OPTS(0),
+    ENCODING(OP_CODE(0x6A), ENC_OPTS(0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 8))),
     ),
     // @TODO: these need two-byte opcode
     //// Pop FS
-    //ENCODING(0x0f 0xa1,
+    //ENCODING(OP_CODE(0x0f 0xa1,
     //    OP_COMB(OPTS(0), OPS(0)),
     //),
     //// Pop GS
-    //ENCODING(0x0f 0xa9,
+    //ENCODING(OP_CODE(0x0f 0xa9,
     //    OP_COMB(OPTS(0), OPS(0)),
     //),
 
@@ -709,28 +1127,28 @@ const InstructionEncoding prefetchw_encoding[] = { 0 };
 const InstructionEncoding ptwrite_encoding[] = { 0 };
 const InstructionEncoding push_encoding[] =
 {
-    ENCODING(0x50, ENC_OPTS(.type = OpCodePlusReg),
+    ENCODING(OP_CODE(0x50), ENC_OPTS(.type = OpCodePlusReg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 64))),
     ),
-    ENCODING(0xff, ENC_OPTS(.type = Digit, .digit = 6),
+    ENCODING(OP_CODE(0xff), ENC_OPTS(.type = Digit, .digit = 6),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 64))),
     ),
-    ENCODING(0x6A, ENC_OPTS(0),
+    ENCODING(OP_CODE(0x6A), ENC_OPTS(0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 8))),
     ),
-    ENCODING(0x68, ENC_OPTS(0),
+    ENCODING(OP_CODE(0x68), ENC_OPTS(0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 16))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 32))),
     ),
     // @TODO: these need two-byte opcode
     //// Push FS
-    //ENCODING(0x0f 0xa0,
+    //ENCODING(OP_CODE(0x0f 0xa0,
     //    OP_COMB(OPTS(0), OPS(0)),
     //),
     //// Push GS
-    //ENCODING(0x0f 0xa8,
+    //ENCODING(OP_CODE(0x0f 0xa8,
     //    OP_COMB(OPTS(0), OPS(0)),
     //),
 };
@@ -749,12 +1167,12 @@ const InstructionEncoding rdtscp_encoding[] = { 0 };
 const InstructionEncoding rep_encoding[] = { 0 };
 const InstructionEncoding ret_encoding[] =
 {
-    ENCODING(0xC3, ENC_OPTS(0)),
-    ENCODING(0xCB, ENC_OPTS(0)),
-    ENCODING(0xC2, ENC_OPTS(0),
+    ENCODING(OP_CODE(0xC3), ENC_OPTS(0)),
+    ENCODING(OP_CODE(0xCB), ENC_OPTS(0)),
+    ENCODING(OP_CODE(0xC2), ENC_OPTS(0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 16))),
     ),
-    ENCODING(0xCA, ENC_OPTS(0),
+    ENCODING(OP_CODE(0xCA), ENC_OPTS(0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 16))),
     ),
 };
@@ -833,6 +1251,41 @@ const InstructionEncoding xtest_encoding[] = { 0 };
 define_mnemonic(adc);
 define_mnemonic(add);
 define_mnemonic(call);
+define_mnemonic(cmp);
+
+define_mnemonic(ja);
+define_mnemonic(jae);
+define_mnemonic(jb);
+define_mnemonic(jbe);
+define_mnemonic(jc);
+define_mnemonic(jecxz);
+define_mnemonic(jrcxz);
+define_mnemonic(je);
+define_mnemonic(jg);
+define_mnemonic(jge);
+define_mnemonic(jl);
+define_mnemonic(jle);
+define_mnemonic(jna);
+define_mnemonic(jnae);
+define_mnemonic(jnb);
+define_mnemonic(jnbe);
+define_mnemonic(jnc);
+define_mnemonic(jne);
+define_mnemonic(jng);
+define_mnemonic(jnge);
+define_mnemonic(jnl_);
+define_mnemonic(jnle);
+define_mnemonic(jno);
+define_mnemonic(jnp);
+define_mnemonic(jns);
+define_mnemonic(jnz);
+define_mnemonic(jo);
+define_mnemonic(jp);
+define_mnemonic(jpe);
+define_mnemonic(jpo);
+define_mnemonic(js);
+define_mnemonic(jz);
+
 define_mnemonic(mov);
 define_mnemonic(pop);
 define_mnemonic(push);
@@ -893,8 +1346,11 @@ bool find_encoding(Instruction instruction, u32* encoding_index, u32* combinatio
                             continue;
                         }
                         break;
-                    case OperandType_RIP_Relative:
-                        RED_NOT_IMPLEMENTED;
+                    case OperandType_Relative:
+                        if (operand_encoding.type == OET_Relative && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
                         break;
                 }
 
@@ -943,27 +1399,41 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     u32 operand_count = array_length(combination.operands);
     redassert(instruction.operands[2].type == OperandType_None && instruction.operands[3].type == OperandType_None);
 
-    if (combination.rex_byte)
+    u8 rex_byte = combination.rex_byte;
+
+    for (u32 i = 0; i < array_length(instruction.operands); i++)
     {
-        u8_append(eb, combination.rex_byte);
-    }
-    else if ((instruction.operands[0].type == OperandType_Register && instruction.operands[0].size == OperandSize_16) || (instruction.operands[1].type == OperandType_Register && instruction.operands[1].size == OperandSize_16))
-    {
-        u8_append(eb, OperandSizeOverride);
+        Operand op = instruction.operands[i];
+        if (op.type == OperandType_Register && op.reg & Register_N_Flag)
+        {
+            if (encoding.options.type == Digit)
+            {
+                rex_byte |= RexR;
+            }
+            else if (encoding.options.type == OpCodePlusReg)
+            {
+                rex_byte |= RexB;
+            }
+        }
     }
 
-
-    u8 op_code = encoding.op_code;
-    bool d = op_code & 0b10;
-    bool s = op_code & 0b1;
     u8 reg_code;
+    u8 op_code[4] = { encoding.op_code[0], encoding.op_code[1], encoding.op_code[2], encoding.op_code[3] };
+
     if (encoding.options.type == OpCodePlusReg)
     {
+        u8 plus_reg_op_code = op_code[0];
+        for (u32 i = 1; i < array_length(op_code); i++)
+        {
+            redassert(op_code[i] == 0);
+        }
         reg_code = instruction.operands[0].reg;
-        op_code = (op_code & 0b11111000) | (reg_code & 0b111);
-    }
+        bool d = plus_reg_op_code & 0b10;
+        bool s = plus_reg_op_code & 0b1;
+        plus_reg_op_code = (plus_reg_op_code & 0b11111000) | (reg_code & 0b111);
+        op_code[0] = plus_reg_op_code;
 
-    u8_append(eb, op_code);
+    }
 
     // MOD RM
     bool need_sib = false;
@@ -975,6 +1445,8 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     u8 register_or_digit;
     u8 r_m = 0;
     u8 mod = 0;
+    u8 mod_r_m = 0;
+
     if (need_mod_rm)
     {
         for (u32 oi = 0; oi < operand_count; oi++)
@@ -983,6 +1455,10 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
             switch (operand.type)
             {
                 case OperandType_Register:
+                    if (operand.reg & Register_N_Flag)
+                    {
+                        rex_byte |= RexB;
+                    }
                     switch (oi)
                     {
                         case 0:
@@ -1007,7 +1483,7 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                 case OperandType_MemoryIndirect:
                     mod = find_mod_displacement(operand.mem_indirect.displacement);
                     r_m = operand.mem_indirect.reg;
-                    need_sib = operand.mem_indirect.reg == rsp.reg;
+                    need_sib = operand.mem_indirect.reg == reg.rsp.reg;
                     if (need_sib)
                     {
                         sib_byte = (
@@ -1027,15 +1503,36 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
             register_or_digit = encoding.options.digit;
         }
 
-        u8 mod_r_m = (
+        mod_r_m = (
             (mod << 6) |
             (register_or_digit << 3) |
             (r_m)
             );
 
-        u8_append(eb, mod_r_m);
     }
 
+    if (rex_byte)
+    {
+        u8_append(eb, rex_byte);
+    }
+    else if ((instruction.operands[0].type == OperandType_Register && instruction.operands[0].size == OperandSize_16) || (instruction.operands[1].type == OperandType_Register && instruction.operands[1].size == OperandSize_16))
+    {
+        u8_append(eb, OperandSizeOverride);
+    }
+
+    for (u32 i = 0; i < array_length(op_code); i++)
+    {
+        u8 op_code_byte = op_code[i];
+        if (op_code_byte)
+        {
+            u8_append(eb, op_code_byte);
+        }
+    }
+
+    if (need_mod_rm)
+    {
+        u8_append(eb, mod_r_m);
+    }
     // SIB
     if (need_sib)
     {
@@ -1086,6 +1583,28 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                     u64_append(eb, operand.imm._64);
                     break;
                 default:
+                    RED_NOT_IMPLEMENTED;
+                    break;
+            }
+        }
+        else if (operand.type == OperandType_Relative)
+        {
+            switch (operand.size)
+            {
+                case OperandSize_8:
+                    u8_append(eb, operand.rel._8);
+                    break;
+                case OperandSize_16:
+                    u16_append(eb, operand.rel._16);
+                    break;
+                case OperandSize_32:
+                    u32_append(eb, operand.rel._32);
+                    break;
+                case OperandSize_64:
+                    u64_append(eb, operand.rel._64);
+                    break;
+                default:
+                    RED_NOT_IMPLEMENTED;
                     break;
             }
         }
@@ -1096,7 +1615,7 @@ static void test_adc_al_imm8(void* s)
 {
     u8 n = 0x1;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {al, imm8(n)}});
+    encode(&eb, (Instruction) {adc, {reg.al, imm8(n)}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x14);
@@ -1108,7 +1627,7 @@ static void test_adc_ax_imm16(void* s)
 {
     u16 n = 0x1234;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {ax, imm16(n)}});
+    encode(&eb, (Instruction) {adc, {reg.ax, imm16(n)}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x15);
@@ -1121,7 +1640,7 @@ static void test_adc_eax_imm32(void* s)
 {
     u32 n = 0x123456;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {eax, imm32(n)}});
+    encode(&eb, (Instruction) {adc, {reg.eax, imm32(n)}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x15);
@@ -1133,7 +1652,7 @@ static void test_adc_rax_imm32(void* s)
 {
     u32 n = 0x123456;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {rax, imm32(n)}});
+    encode(&eb, (Instruction) {adc, {reg.rax, imm32(n)}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x48);
@@ -1147,7 +1666,7 @@ static void test_adc_r64_m64(void* s)
 {
     u32 n = 0xfffffff;
     ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {rbx, stack(n, sizeof(n))}});
+    encode(&eb, (Instruction) {adc, {reg.rbx, stack(n, sizeof(n))}});
 
     ExecutionBuffer expected = give_me(64);
     u8_append(&expected, 0x48);
@@ -1180,108 +1699,98 @@ static bool test_instruction(const char* test_name, Instruction instruction, u8*
 
 void test_main(s32 argc, char* argv[])
 {
-    TEST(add_ax_imm16, INSTR(add, { ax, imm16(0xffff) }), EXPECTED(0x66, 0x05, 0xff, 0xff)));
-    TEST(add_al_imm8, INSTR(add, { al, imm8(0xff) }), EXPECTED(0x04, UINT8_MAX)));
-    TEST(add_eax_imm32, INSTR(add, { eax, imm32(0xffffffff) }), EXPECTED(0x05, 0xff, 0xff, 0xff, 0xff)));
-    TEST(add_rax_imm32, INSTR(add, { rax, imm32(0xffffffff) }), EXPECTED(0x48, 0x05, 0xff, 0xff, 0xff, 0xff)));
-    TEST(add_rm8_imm8, INSTR(add, { bl, imm8(0xff) }), EXPECTED(0x80, 0xc3, 0xff)));
-    TEST(add_rm16_imm16, INSTR(add, { bx, imm16(0xffff) }), EXPECTED(0x66, 0x81, 0xc3, 0xff, 0xff)));
-    TEST(add_rm32_imm32, INSTR(add, { ebx, imm32(0xffffffff) }), EXPECTED(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(add_rm64_imm32, INSTR(add, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(call_r64, INSTR(call, { rax }), EXPECTED(0xff, 0xd0)));
-    TEST(mov_bl_cl, INSTR(mov, { bl, cl }), EXPECTED(0x88, 0xcb)));
-    TEST(mov_bx_cx, INSTR(mov, { bx, cx }), EXPECTED(0x66, 0x89, 0xcb)));
-    TEST(mov_ebx_ecx, INSTR(mov, { ebx, ecx }), EXPECTED(0x89, 0xcb)));
-    TEST(mov_rbx_rcx, INSTR(mov, { rbx, rcx }), EXPECTED(0x48, 0x89, 0xcb)));
-    TEST(mov_al_imm8, INSTR(mov, { al, imm8(0xff) }), EXPECTED(0xb0, UINT8_MAX)));
-    TEST(mov_ax_imm16, INSTR(mov, { ax, imm16(0xffff) }), EXPECTED(0x66, 0xb8, 0xff, 0xff)));
-    TEST(mov_eax_imm32, INSTR(mov, { eax, imm32(0xffffffff) }), EXPECTED(0xb8, 0xff, 0xff)));
-    TEST(mov_rax_imm32, INSTR(mov, { rax, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_rax_imm64, INSTR(mov, { rax, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_r8_imm8,   INSTR(mov, { bl, imm8(0xff) }), EXPECTED(0xb3, 0xff)));
-    TEST(mov_r16_imm16, INSTR(mov, { bx, imm16(0xffff) }), EXPECTED(0x66, 0xbb, 0xff, 0xff)));
-    TEST(mov_r32_imm32, INSTR(mov, { ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_r64_imm64, INSTR(mov, { rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_rm64_imm32, INSTR(mov, { rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack(-8, 8), rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
-    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { rax, stack(-8, 8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
-    TEST(pop_r64, INSTR(pop, { rbp }), EXPECTED(0x5d)));
-    TEST(push_r64, INSTR(push, { rbp }), EXPECTED(0x55)));
+    TEST(add_ax_imm16, INSTR(add, { reg.ax, imm16(0xffff) }), EXPECTED(0x66, 0x05, 0xff, 0xff)));
+    TEST(add_al_imm8, INSTR(add, { reg.al, imm8(0xff) }), EXPECTED(0x04, UINT8_MAX)));
+    TEST(add_eax_imm32, INSTR(add, { reg.eax, imm32(0xffffffff) }), EXPECTED(0x05, 0xff, 0xff, 0xff, 0xff)));
+    TEST(add_rax_imm32, INSTR(add, { reg.rax, imm32(0xffffffff) }), EXPECTED(0x48, 0x05, 0xff, 0xff, 0xff, 0xff)));
+    TEST(add_rm8_imm8, INSTR(add, { reg.bl, imm8(0xff) }), EXPECTED(0x80, 0xc3, 0xff)));
+    TEST(add_rm16_imm16, INSTR(add, { reg.bx, imm16(0xffff) }), EXPECTED(0x66, 0x81, 0xc3, 0xff, 0xff)));
+    TEST(add_rm32_imm32, INSTR(add, { reg.ebx, imm32(0xffffffff) }), EXPECTED(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(add_rm64_imm32, INSTR(add, { reg.rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(call_r64, INSTR(call, { reg.rax }), EXPECTED(0xff, 0xd0)));
+    TEST(mov_bl_cl, INSTR(mov, { reg.bl, reg.cl }), EXPECTED(0x88, 0xcb)));
+    TEST(mov_bx_cx, INSTR(mov, { reg.bx, reg.cx }), EXPECTED(0x66, 0x89, 0xcb)));
+    TEST(mov_ebx_ecx, INSTR(mov, { reg.ebx, reg.ecx }), EXPECTED(0x89, 0xcb)));
+    TEST(mov_rbx_rcx, INSTR(mov, { reg.rbx, reg.rcx }), EXPECTED(0x48, 0x89, 0xcb)));
+    TEST(mov_al_imm8, INSTR(mov, { reg.al, imm8(0xff) }), EXPECTED(0xb0, UINT8_MAX)));
+    TEST(mov_ax_imm16, INSTR(mov, { reg.ax, imm16(0xffff) }), EXPECTED(0x66, 0xb8, 0xff, 0xff)));
+    TEST(mov_eax_imm32, INSTR(mov, { reg.eax, imm32(0xffffffff) }), EXPECTED(0xb8, 0xff, 0xff)));
+    TEST(mov_rax_imm32, INSTR(mov, { reg.rax, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff)));
+    TEST(mov_rax_imm64, INSTR(mov, { reg.rax, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
+    TEST(mov_r8_imm8,   INSTR(mov, { reg.bl, imm8(0xff) }), EXPECTED(0xb3, 0xff)));
+    TEST(mov_r16_imm16, INSTR(mov, { reg.bx, imm16(0xffff) }), EXPECTED(0x66, 0xbb, 0xff, 0xff)));
+    TEST(mov_r32_imm32, INSTR(mov, { reg.ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff)));
+    TEST(mov_r64_imm64, INSTR(mov, { reg.rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
+    TEST(mov_rm64_imm32, INSTR(mov, { reg.rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack(-8, 8), reg.rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
+    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { reg.rax, stack(-8, 8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
+    TEST(pop_r64, INSTR(pop, { reg.rbp }), EXPECTED(0x5d)));
+    TEST(push_r64, INSTR(push, { reg.rbp }), EXPECTED(0x55)));
+    TEST(push_r9, INSTR(push, { reg.r9 }), EXPECTED(0x41, 0x51)));
 }
 
-typedef struct Function
+typedef struct FunctionBuilder
 {
     ExecutionBuffer eb;
     s32 stack_offset;
-    u32 arg_count;
-} Function;
+    u8 next_arg;
+} FunctionBuilder;
 
-Operand declare_variable(Function* fn, s32 size)
+Operand declare_variable(FunctionBuilder* fn, s32 size)
 {
     fn->stack_offset -= size;
 
     return stack(fn->stack_offset, size);
 }
 
-void assign(Function* fn, Operand a, Operand b)
+void assign(FunctionBuilder* fn, Operand a, Operand b)
 {
     encode(&fn->eb, (Instruction) { mov, {a, b} });
 }
 
-Operand do_add(Function* fn, Operand a, Operand b)
+Operand do_add(FunctionBuilder* fn, Operand a, Operand b)
 {
     encode(&fn->eb, (Instruction) { add, { a, b } });
     return a;
 }
 
-Function fn_begin(void)
+FunctionBuilder fn_begin(void)
 {
-    Function fn = {.eb = give_me(1024) };
-    encode(&fn.eb, (Instruction) { push, { rbp } });
-    encode(&fn.eb, (Instruction) { mov, { rbp, rsp } });
+    FunctionBuilder fn = {.eb = give_me(1024) };
+    encode(&fn.eb, (Instruction) { push, { reg.rbp } });
+    encode(&fn.eb, (Instruction) { mov, { reg.rbp, reg.rsp } });
 
     return fn;
 }
 
-void fn_return(Function* fn, Operand to_return)
+void fn_return(FunctionBuilder* fn, Operand to_return)
 {
-    Operand ret_reg;
-
-    switch (to_return.size)
-    {
-        case OperandSize_8:
-            ret_reg = al;
-            break;
-        case OperandSize_16:
-            ret_reg = ax;
-            break;
-        case OperandSize_32:
-            ret_reg = eax;
-            break;
-        case OperandSize_64:
-            ret_reg = rax;
-            break;
-        default:
-            RED_UNREACHABLE;
-            break;
-    }
+    Operand ret_reg = reg.arr[register_size_jump_table[to_return.size]][return_registers[0]];
 
     if (memcmp(&ret_reg, &to_return, sizeof(to_return)) != 0)
     {
         encode(&fn->eb, (Instruction) { mov, { ret_reg, to_return }});
     }
 
-    encode(&fn->eb, (Instruction) { pop, { rbp } });
+    encode(&fn->eb, (Instruction) { pop, { reg.rbp } });
     encode(&fn->eb, (Instruction) { ret });
 }
 
+Operand fn_arg(FunctionBuilder* fn, u64 byte_size)
+{
+    redassert(fn->next_arg < array_length(parameter_registers));
+    Operand arg = reg.arr[register_size_jump_table[byte_size]][parameter_registers[fn->next_arg]];
+    fn->next_arg++;
+    return arg;
+};
+
 void test_abstract_fn()
 {
-    Function fn = fn_begin();
+    FunctionBuilder fn = fn_begin();
     Operand var = declare_variable(&fn, 4);
-    assign(&fn, var, edi);
-    assign(&fn, eax, var);
-    Operand add_result = do_add(&fn, eax, var);
+    assign(&fn, var, reg.edi);
+    assign(&fn, reg.eax, var);
+    Operand add_result = do_add(&fn, reg.eax, var);
     fn_return(&fn, add_result);
 
     u8 expected[] = { 0x55, 0x48, 0x89, 0xe5, 0x89, 0x7d, 0xfc, 0x8b, 0x45, 0xfc, 0x03, 0x45, 0xfc, 0x5d, 0xc3 };
@@ -1295,13 +1804,11 @@ void test_abstract_fn()
     print("Expected %d\n", n + n);
 }
 
-
-
 typedef s32 RetS32(void);
 
 RetS32* make_ret_s32(void)
 {
-    Function fn = fn_begin();
+    FunctionBuilder fn = fn_begin();
     Operand var = declare_variable(&fn, 4);
     assign(&fn, var, imm32(18293));
     fn_return(&fn, var);
@@ -1311,16 +1818,62 @@ RetS32* make_ret_s32(void)
 
 typedef s32 ProxyFn(RetS32);
 
-void wna_main(s32 argc, char* argv[])
+// This can implement simple lambdas
+void test_proxy_fn(void)
 {
-    Function fn = fn_begin();
-    encode(&fn.eb, (Instruction) {call, {rdi}});
-    fn_return(&fn, rax);
+    FunctionBuilder fn = fn_begin();
+    encode(&fn.eb, (Instruction) {call, {reg.rdi}});
+    fn_return(&fn, reg.rax);
 
     RetS32* ret_s32 = make_ret_s32();
     ProxyFn* proxy_fn = (ProxyFn*)fn.eb.ptr;
     s32 result = proxy_fn(ret_s32);
     print("Result: %d\n", result);
+}
+
+typedef s32 s32_s32(s32);
+
+typedef struct LabelPatch
+{
+    u8* address;
+    s64 ip;
+} LabelPatch;
+
+LabelPatch make_jnz(FunctionBuilder* fn)
+{
+    encode(&fn->eb, (Instruction) { jnz, { rel8(0xcc) } });
+    s64 ip = fn->eb.len;
+    u8* patch = &fn->eb.ptr[ip - 1];
+
+    return (LabelPatch) { patch, ip };
+}
+
+void make_jump_label(FunctionBuilder* fn, LabelPatch patch)
+{
+    u8 diff = (fn->eb.len - patch.ip);
+    redassert(diff <= 0x80);
+    *patch.address = diff;
+}
+
+void make_is_non_zero(void)
+{
+    FunctionBuilder fn = fn_begin();
+    Operand n = fn_arg(&fn, sizeof(s32));
+    print("%d\n", n.reg);
+    encode(&fn.eb, (Instruction) { cmp, { n, imm32(0) } });
+    LabelPatch patch = make_jnz(&fn);
+    fn_return(&fn, imm32(0));
+    make_jump_label(&fn, patch);
+    fn_return(&fn, imm32(1));
+
+    s32_s32* function = (s32_s32*)fn.eb.ptr;
+    print("Should be 0: %d\n", function(0));
+    print("Should be 1: %d\n", function(-128391));
+}
+
+void wna_main(s32 argc, char* argv[])
+{
+    make_is_non_zero();
 }
 
 s32 main(s32 argc, char* argv[])
