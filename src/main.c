@@ -864,18 +864,77 @@ const InstructionEncoding cmpxchg8b_encoding[] = { 0 };
 const InstructionEncoding cmpxchg16b_encoding[] = { 0 };
 const InstructionEncoding cpuid_encoding[] = { 0 };
 const InstructionEncoding crc32_encoding[] = { 0 };
-const InstructionEncoding cwd_encoding[] = { 0 };
-const InstructionEncoding cdq_encoding[] = { 0 };
-const InstructionEncoding cqo_encoding[] = { 0 };
+const InstructionEncoding cwd_cdq_cqo_encoding[] =
+{
+    ENCODING(OP_CODE(0x99),ENC_OPTS(0),
+        //OP_COMB(OPTS(NO_OPTS), OPS(0)),
+        OP_COMB(OPTS(.rex_byte = RexW), OPS(0)),
+    ),
+};
 const InstructionEncoding dec_encoding[] = { 0 };
-const InstructionEncoding div_encoding[] = { 0 };
+
+// unsigned division
+const InstructionEncoding div__encoding[] =
+{
+    ENCODING(OP_CODE(0xF6),ENC_OPTS(.type = Digit, .digit = 6),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(OP_CODE(0xF7),ENC_OPTS(.type = Digit, .digit = 6),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64))),
+    ),
+};
+
 const InstructionEncoding endbr32_encoding[] = { 0 };
 const InstructionEncoding endbr64_encoding[] = { 0 };
 const InstructionEncoding enter_encoding[] = { 0 };
 // Tons of float instructions here
 const InstructionEncoding hlt_encoding[] = { 0 };
-const InstructionEncoding idiv_encoding[] = { 0 };
-const InstructionEncoding imul_encoding[] = { 0 };
+
+// signed division
+const InstructionEncoding idiv_encoding[] =
+{
+    ENCODING(OP_CODE(0xF6),ENC_OPTS(.type = Digit, .digit = 7),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(OP_CODE(0xF7),ENC_OPTS(.type = Digit, .digit = 7),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64))),
+    ),
+};
+
+// Signed multiply
+const InstructionEncoding imul_encoding[] =
+{
+    ENCODING(OP_CODE(0xF6),ENC_OPTS(.type = Digit, .digit = 5),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(OP_CODE(0xF7),ENC_OPTS(.type = Digit, .digit = 5),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64))),
+    ),
+    ENCODING(OP_CODE(0x0F, 0xAF), ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
+    ),
+    ENCODING(OP_CODE(0x6B), ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(OP_CODE(0x69), ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),              OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
+    ),
+};
+
 const InstructionEncoding in_encoding[] = { 0 };
 const InstructionEncoding inc_encoding[] = { 0 };
 const InstructionEncoding incssp_encoding[] = { 0 };
@@ -1261,7 +1320,21 @@ const InstructionEncoding movq_encoding[] = { 0 };
 const InstructionEncoding movs_encoding[] = { 0 };
 const InstructionEncoding movsx_encoding[] = { 0 };
 const InstructionEncoding movzx_encoding[] = { 0 };
-const InstructionEncoding mul_encoding[] = { 0 };
+
+// Unsigned multiply
+const InstructionEncoding mul_encoding[] =
+{
+    ENCODING(OP_CODE(0xF6), ENC_OPTS(.type = Digit, .digit = 4),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),     OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(OP_CODE(0xF7), ENC_OPTS(.type = Digit, .digit = 4),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64))),
+    ),
+};
+
 const InstructionEncoding mulx_encoding[] = { 0 };
 const InstructionEncoding mwait_encoding[] = { 0 };
 const InstructionEncoding neg_encoding[] = { 0 };
@@ -1383,7 +1456,51 @@ const InstructionEncoding std_encoding[] = { 0 };
 const InstructionEncoding sti_encoding[] = { 0 };
 const InstructionEncoding stos_encoding[] = { 0 };
 const InstructionEncoding str_encoding[] = { 0 };
-const InstructionEncoding sub_encoding[] = { 0 };
+
+const InstructionEncoding sub_encoding[] =
+{
+    ENCODING(OP_CODE(0x2C),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 8), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(OP_CODE(0x2D),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_A, 32), OP(OET_Immediate, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_A, 64), OP(OET_Immediate, 32))),
+    ),
+    ENCODING(OP_CODE(0x80),ENC_OPTS(.type = Digit, .digit = 5),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory,8), OP(OET_Immediate, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory,8), OP(OET_Immediate, 8))),
+        ),
+    ENCODING(OP_CODE(0x81),ENC_OPTS(.type = Digit, .digit = 5),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 32))),
+    ),
+    ENCODING(OP_CODE(0x83),ENC_OPTS(.type = Digit, .digit = 5),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Immediate, 8))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Immediate, 8))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Immediate, 8))),
+    ),
+    ENCODING(OP_CODE(0x28),ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register_Or_Memory, 8), OP(OET_Register, 8))),
+    ),
+    ENCODING(OP_CODE(0x29),ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 16), OP(OET_Register, 16))),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 32), OP(OET_Register, 32))),
+        OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register_Or_Memory, 64), OP(OET_Register, 64))),
+    ),
+    ENCODING(OP_CODE(0x2A),ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(.rex_byte = Rex,    OPS(OP(OET_Register, 8), OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(OP_CODE(0x2B),ENC_OPTS(.type = Reg),
+    	OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 16), OP(OET_Register_Or_Memory, 16))),
+    	OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register, 32), OP(OET_Register_Or_Memory, 32))),
+    	OP_COMB(.rex_byte = RexW,   OPS(OP(OET_Register, 64), OP(OET_Register_Or_Memory, 64))),
+    ),
+};
+
 const InstructionEncoding swapgs_encoding[] = { 0 };
 const InstructionEncoding syscall_encoding[] = { 0 };
 const InstructionEncoding sysenter_encoding[] = { 0 };
@@ -1430,6 +1547,10 @@ define_mnemonic(adc);
 define_mnemonic(add);
 define_mnemonic(call);
 define_mnemonic(cmp);
+define_mnemonic(cwd_cdq_cqo);
+define_mnemonic(div_);
+define_mnemonic(idiv);
+define_mnemonic(imul);
 
 define_mnemonic(jmp);
 
@@ -1466,10 +1587,12 @@ define_mnemonic(jpo);
 define_mnemonic(js);
 define_mnemonic(jz);
 
+define_mnemonic(mul);
 define_mnemonic(mov);
 define_mnemonic(pop);
 define_mnemonic(push);
 define_mnemonic(ret);
+define_mnemonic(sub);
 
 bool find_encoding(Instruction instruction, u32* encoding_index, u32* combination_index)
 {
@@ -1577,7 +1700,6 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     InstructionEncoding encoding = instruction.mnemonic.encodings[encoding_index];
     OperandCombination combination = encoding.operand_combinations[combination_index];
     u32 operand_count = array_length(combination.operands);
-    redassert(instruction.operands[2].type == OperandType_None && instruction.operands[3].type == OperandType_None);
 
     u8 rex_byte = combination.rex_byte;
 
@@ -1917,12 +2039,27 @@ typedef struct FunctionBuilder
     u8 next_arg;
 } FunctionBuilder;
 
-Operand declare_variable(FunctionBuilder* fn_builder, s32 size)
+#if 0
+Operand reserve_stack(FunctionBuilder* fn_builder, s32 size)
 {
     fn_builder->stack_offset -= size;
 
     return stack(fn_builder->stack_offset, size);
 }
+#else
+Value reserve_stack(FunctionBuilder* fn_builder, Descriptor* descriptor)
+{
+    // @TODO: don't hardcode the size
+    u32 size = 8;
+    fn_builder->stack_offset -= size;
+    Operand reserved = stack(fn_builder->stack_offset, size);
+    return (const Value)
+    {
+        .descriptor = *descriptor,
+        .operand = reserved,
+    }; 
+}
+#endif
 
 void assign(FunctionBuilder* fn_builder, Operand a, Operand b)
 {
@@ -1985,7 +2122,7 @@ void fn_return(FunctionBuilder* fn_builder, Value to_return)
         u32 register_index = return_registers[0];
         Operand ret_reg = reg.arr[size_index][register_index];
 
-        if (memcmp(&ret_reg, &to_return, sizeof(to_return)) != 0)
+        if (memcmp(&ret_reg, &to_return.operand, sizeof(to_return)) != 0)
         {
             encode(&fn_builder->eb, (Instruction) { mov, { ret_reg, to_return.operand }});
         }
@@ -1995,10 +2132,11 @@ void fn_return(FunctionBuilder* fn_builder, Value to_return)
     encode(&fn_builder->eb, (Instruction) { ret });
 }
 
+#if 0
 void test_abstract_fn()
 {
     FunctionBuilder fn_builder = fn_begin();
-    Operand var = declare_variable(&fn_builder, 4);
+    Operand var = reserve_stack(&fn_builder, 4);
     assign(&fn_builder, var, reg.edi);
     assign(&fn_builder, reg.eax, var);
     Operand add_result = do_add(&fn_builder, reg.eax, var);
@@ -2020,7 +2158,7 @@ typedef s32 RetS32(void);
 RetS32* make_ret_s32(void)
 {
     FunctionBuilder fn_builder = fn_begin();
-    Operand var = declare_variable(&fn_builder, 4);
+    Operand var = reserve_stack(&fn_builder, 4);
     assign(&fn_builder, var, imm32(18293));
     fn_return(&fn_builder, (const Value) {.descriptor = descriptor_integer, .operand = var });
 
@@ -2041,6 +2179,7 @@ void test_proxy_fn(void)
     s32 result = proxy_fn(ret_s32);
     print("Result: %d\n", result);
 }
+#endif
 
 typedef s32 s32_s32(s32);
 
@@ -2175,9 +2314,142 @@ void print_fn(void)
     value_as_function(&fn_value, VoidRetVoid)();
 }
 
+void assert_not_a_register(Value* value)
+{
+    redassert(value);
+    if (value->operand.type == OperandType_Register)
+    {
+        redassert(value->operand.reg != Register_A);
+    }
+}
+
+Value rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic mnemonic, Value a, Value b)
+{
+    assert_not_a_register(&a);
+    assert_not_a_register(&b);
+
+    u32 max_size = MAX(a.operand.size, b.operand.size);
+    Operand reg1 = get_reg(max_size, Register_A);
+    Operand reg2 = get_reg(max_size, Register_B);
+
+    encode(&fn_builder->eb, (Instruction) { mov, {reg1, a.operand }} );
+    encode(&fn_builder->eb, (Instruction) { mov, {reg2, b.operand }} );
+    encode(&fn_builder->eb, (Instruction) { mnemonic, {reg1, reg2 }} );
+
+    Value temporary_value = reserve_stack(fn_builder, &a.descriptor);
+    encode(&fn_builder->eb, (Instruction) { mov, { temporary_value.operand, reg1 }} );
+
+    return temporary_value;
+}
+
+static inline Value rns_add(FunctionBuilder* fn_builder, Value a, Value b)
+{
+    return rns_arithmetic(fn_builder, add, a, b);
+}
+
+static inline Value rns_sub(FunctionBuilder* fn_builder, Value a, Value b)
+{
+    return rns_arithmetic(fn_builder, sub, a, b);
+}
+
+static inline Value rns_signed_mul_immediate(FunctionBuilder* fn_builder, Value a, Value b)
+{
+    assert_not_a_register(&a);
+    assert_not_a_register(&b);
+    redassert(b.operand.type == OperandType_Immediate && b.operand.size <= OperandSize_32);
+
+    u32 max_size = MAX(a.operand.size, b.operand.size);
+    Operand reg1 = get_reg(max_size, Register_A);
+
+    encode(&fn_builder->eb, (Instruction) { mov, {reg1, a.operand }} );
+    encode(&fn_builder->eb, (Instruction) { imul, {reg1, reg1, b.operand }} );
+
+    Value temporary_value = reserve_stack(fn_builder, &a.descriptor);
+    encode(&fn_builder->eb, (Instruction) { mov, { temporary_value.operand, reg1 }} );
+
+    return temporary_value;
+}
+
+static inline Value rns_signed_div(FunctionBuilder* fn_builder, Value a, Value b)
+{
+    assert_not_a_register(&a);
+    assert_not_a_register(&b);
+
+    u32 max_size = MAX(a.operand.size, b.operand.size);
+    Operand reg1 = get_reg(max_size, Register_A);
+
+    // Signed division stores the remainder in the D register
+    Value rdx_temp = reserve_stack(fn_builder, &a.descriptor);
+    encode(&fn_builder->eb, (Instruction) { mov, {rdx_temp.operand, reg.rdx }} );
+
+    encode(&fn_builder->eb, (Instruction) { mov, {reg1, a.operand }} );
+
+    Operand b_operand = get_reg(b.operand.size, Register_B);
+    encode(&fn_builder->eb, (Instruction) { mov, {b_operand, b.operand }});
+    encode(&fn_builder->eb, (Instruction) { cwd_cdq_cqo, {0}});
+    encode(&fn_builder->eb, (Instruction) { idiv, {b_operand}});
+
+    Value temporary_value = reserve_stack(fn_builder, &a.descriptor);
+    encode(&fn_builder->eb, (Instruction) { mov, { temporary_value.operand, reg1 }} );
+
+    // Restore RDX
+    encode(&fn_builder->eb, (Instruction) { mov, {reg.rdx, rdx_temp.operand}});
+
+    return temporary_value;
+}
+
+typedef s64 RetS64_ParamS64_S64(s64, s64);
+
+void test_rns_add_sub(void)
+{
+    s64 value_a = 5;
+    s64 value_b = 6;
+    s64 sub_value = 4;
+    FunctionBuilder fn_builder = fn_begin();
+    Value a = s64_value(value_a);
+    Value b = s64_value(value_b);
+    Value sub_v = s64_value(sub_value);
+    Value sub_result = rns_sub(&fn_builder, a, sub_v);
+    Value add_result = rns_add(&fn_builder, sub_result, b);
+    fn_return(&fn_builder, add_result);
+    Value fn = fn_end(&fn_builder);
+    s64 result = value_as_function(&fn, RetS64_ParamS64_S64)(value_a, value_b);
+
+    print("Result: %ld\n", result);
+    print("Expected: %ld\n", value_a - sub_value + value_b);
+}
+
+void test_multiply(void)
+{
+    s64 value_a = -5;
+    s32 value_b = 6;
+    FunctionBuilder fn_builder = fn_begin();
+    Value a = s64_value(value_a);
+    Value b = s32_value(value_b);
+    fn_return(&fn_builder, rns_signed_mul_immediate(&fn_builder, a, b));
+    Value fn = fn_end(&fn_builder);
+    s64 result = value_as_function(&fn, RetS64_ParamS64_S64)(value_a, value_b);
+    printf("Result: %ld\n", result);
+    printf("Expected: %ld\n", value_a * value_b);
+}
+
+void test_divide(void)
+{
+    s64 value_a = 40;
+    s64 value_b = 5;
+    FunctionBuilder fn_builder = fn_begin();
+    Value a = s64_value(value_a);
+    Value b = s64_value(value_b);
+    fn_return(&fn_builder, rns_signed_div(&fn_builder, a, b));
+    Value fn = fn_end(&fn_builder);
+    s64 result = value_as_function(&fn, RetS64_ParamS64_S64)(value_a, value_b);
+    printf("Result: %ld\n", result);
+    printf("Expected: %ld\n", value_a / value_b);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    print_fn();
+    test_divide();
 }
 
 s32 main(s32 argc, char* argv[])

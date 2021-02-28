@@ -35,6 +35,16 @@ typedef float128_t f128;
 
 //#define max(a, b) (((a) >= (b)) ? (a) : (b))
 //#define min(a, b) (((a) <= (b)) ? (a) : (b))
+//
+#define MAX(a, b)\
+    ({__typeof__ (a) _a = (a);\
+      __typeof__ (b) _b = (b);\
+      _a > _b ? _a : _b; })
+#define MIN(a, b)\
+    ({__typeof__ (a) _a = (a);\
+      __typeof__ (b) _b = (b);\
+      _a < _b ? _a : _b; })
+
 #define char_to_int(c) (((s32)c) - 48)
 
 #define A_BYTE      (1ULL)
