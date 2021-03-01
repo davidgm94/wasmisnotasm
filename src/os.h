@@ -17,6 +17,9 @@
 #endif
 #elif _WIN32
 #define RED_OS_WINDOWS
+#if _DEBUG
+#define RED_DEBUG
+#endif
 #else
 #error
 #endif

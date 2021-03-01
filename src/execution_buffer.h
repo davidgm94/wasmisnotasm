@@ -40,7 +40,7 @@ static inline ExecutionBuffer give_me(s64 capacity)
 #define APPEND(type)\
     static inline void type##_append(ExecutionBuffer* eb, type value)\
 {\
-    usize size_to_be_added = sizeof(type);\
+    s64 size_to_be_added = sizeof(type);\
     redassert(eb->len + size_to_be_added < eb->cap);\
     type* ptr = (type*) &eb->ptr[eb->len];\
     *ptr = value;\
@@ -56,7 +56,7 @@ APPEND(s16)
 APPEND(s32)
 APPEND(s64)
 
-static inline void append_chunk(ExecutionBuffer* eb, void* ptr, usize size)
+static inline void append_chunk(ExecutionBuffer* eb, void* ptr, s64 size)
 {
     redassert(eb->len + size < eb->cap);
     memcpy((void*)&eb->ptr[eb->len], ptr, size);

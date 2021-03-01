@@ -36,14 +36,27 @@ typedef float128_t f128;
 //#define max(a, b) (((a) >= (b)) ? (a) : (b))
 //#define min(a, b) (((a) <= (b)) ? (a) : (b))
 //
+#if _MSC_VER
+#ifndef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+#else
+#ifndef MAX
 #define MAX(a, b)\
     ({__typeof__ (a) _a = (a);\
       __typeof__ (b) _b = (b);\
       _a > _b ? _a : _b; })
+#endif
+#ifndef MIN
 #define MIN(a, b)\
     ({__typeof__ (a) _a = (a);\
       __typeof__ (b) _b = (b);\
       _a < _b ? _a : _b; })
+#endif
+#endif
 
 #define char_to_int(c) (((s32)c) - 48)
 

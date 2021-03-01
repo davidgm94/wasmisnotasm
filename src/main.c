@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #ifdef RED_OS_WINDOWS
-#error
 #else
 #include <sys/mman.h>
 #include <unistd.h>
@@ -178,6 +177,7 @@ typedef struct Operand
     };
 } Operand;
 
+struct Descriptor;
 typedef enum DescriptorType
 {
     DescriptorType_Void,
@@ -185,6 +185,7 @@ typedef enum DescriptorType
     DescriptorType_Pointer,
     DescriptorType_FixedSizeArray,
     DescriptorType_Function,
+    DescriptorType_Struct,
 } DescriptorType;
 
 typedef struct Value Value;
@@ -201,12 +202,24 @@ typedef struct DescriptorFixedSizeArray
     s64 len;
 } DescriptorFixedSizeArray;
 
+
 typedef struct DescriptorInteger
 {
     u32 size;
 } DescriptorInteger;
 
-struct Descriptor;
+typedef struct DescriptorStructField
+{
+    const struct Descriptor* descriptor;
+    s32 offset;
+} DescriptorStructField;
+
+typedef struct DescriptorStruct
+{
+    struct DescriptorStructField* field_list;
+    s64 field_count;
+} DescriptorStruct;
+
 typedef struct Descriptor
 {
     DescriptorType type;
@@ -216,12 +229,13 @@ typedef struct Descriptor
         DescriptorFunction function;
         struct Descriptor* pointer_to;
         DescriptorFixedSizeArray fixed_size_array;
+        DescriptorStruct struct_;
     };
 } Descriptor;
 
 const u32 pointer_size = sizeof(usize);
 
-u32 descriptor_size(const Descriptor* descriptor)
+s64 descriptor_size(const Descriptor* descriptor)
 {
     DescriptorType type = descriptor->type;
     switch (type)
@@ -409,31 +423,17 @@ static inline Operand rel32(u32 value)
     return (const Operand)_rel(32, value);
 }
 
-static inline Operand rel48(u64 value)
-{
-    return (const Operand)_rel(48, value);
-}
-
 static inline Operand rel64(u64 value)
 {
     return (const Operand)_rel(64, value);
 }
 
 #if defined (MSVC_x86_64)
-static inline Operand stack(s32 offset)
-{
-    return (const Operand)
-    {
-        .type = OperandType_MemoryIndirect,
-        .size = OperandSize_64,
-        .mem_indirect =
-        {
-            .reg = rsp.reg,
-            .displacement = offset,
-        },
-    };
-}
-#else
+#define stack_reg reg.rsp.reg
+#elif defined (SYSTEM_V_x86_64)
+#define stack_reg reg.rbp.reg
+#endif
+
 static inline Operand stack(s32 offset, s32 size)
 {
     return (const Operand)
@@ -441,13 +441,12 @@ static inline Operand stack(s32 offset, s32 size)
         .type = OperandType_MemoryIndirect,
         .mem_indirect =
         {
-            .reg = reg.rbp.reg,
+            .reg = stack_reg,
             .displacement = offset,
         },
         .size = size,
     };
 }
-#endif
 
 static inline Value s32_value(s32 v)
 {
@@ -465,6 +464,7 @@ static inline Value s64_value(s64 v)
         .operand = imm64(v),
     };
 }
+
 static inline Value pointer_value(u64 address)
 {
     return (const Value)
@@ -473,7 +473,6 @@ static inline Value pointer_value(u64 address)
         .operand = imm64(address),
     };
 }
-
 
 #ifdef MSVC_x86_64
 
@@ -593,9 +592,6 @@ Value C_function_value(const char* proto, u64 address)
     it++;
 
     char* start = it;
-    char buffer[128];
-    u8 pointer_depth = 0;
-
 
     Value* arg = malloc(sizeof(Value));
     *arg = (const Value)
@@ -611,7 +607,7 @@ Value C_function_value(const char* proto, u64 address)
         }
         if (*it == ' ' || *it == ')' || *it == '*')
         {
-            u32 length = it - start;
+            s64 length = it - start;
 
             if (start != it)
             {
@@ -1485,8 +1481,8 @@ const InstructionEncoding rdtscp_encoding[] = { 0 };
 const InstructionEncoding rep_encoding[] = { 0 };
 const InstructionEncoding ret_encoding[] =
 {
-    ENCODING(OP_CODE(0xC3), ENC_OPTS(0)),
-    ENCODING(OP_CODE(0xCB), ENC_OPTS(0)),
+    ENCODING(OP_CODE(0xC3), ENC_OPTS(0), {0}),
+    ENCODING(OP_CODE(0xCB), ENC_OPTS(0), {0}),
     ENCODING(OP_CODE(0xC2), ENC_OPTS(0),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Immediate, 16))),
     ),
@@ -2232,72 +2228,6 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     }
 }
 
-static void test_adc_al_imm8(void* s)
-{
-    u8 n = 0x1;
-    ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {reg.al, imm8(n)}});
-
-    ExecutionBuffer expected = give_me(64);
-    u8_append(&expected, 0x14);
-    u8_append(&expected, n);
-
-    test_buffer(&eb, expected.ptr, expected.len, __func__);
-}
-static void test_adc_ax_imm16(void* s)
-{
-    u16 n = 0x1234;
-    ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {reg.ax, imm16(n)}});
-
-    ExecutionBuffer expected = give_me(64);
-    u8_append(&expected, 0x15);
-    u16_append(&expected, n);
-
-    test_buffer(&eb, expected.ptr, expected.len, __func__);
-}
-
-static void test_adc_eax_imm32(void* s)
-{
-    u32 n = 0x123456;
-    ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {reg.eax, imm32(n)}});
-
-    ExecutionBuffer expected = give_me(64);
-    u8_append(&expected, 0x15);
-    u32_append(&expected, n);
-
-    test_buffer(&eb, expected.ptr, expected.len, __func__);
-}
-static void test_adc_rax_imm32(void* s)
-{
-    u32 n = 0x123456;
-    ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {reg.rax, imm32(n)}});
-
-    ExecutionBuffer expected = give_me(64);
-    u8_append(&expected, 0x48);
-    u8_append(&expected, 0x15);
-    u32_append(&expected, n);
-
-    test_buffer(&eb, expected.ptr, expected.len, __func__);
-}
-
-static void test_adc_r64_m64(void* s)
-{
-    u32 n = 0xfffffff;
-    ExecutionBuffer eb = give_me(64);
-    encode(&eb, (Instruction) {adc, {reg.rbx, stack(n, sizeof(n))}});
-
-    ExecutionBuffer expected = give_me(64);
-    u8_append(&expected, 0x48);
-    u8_append(&expected, 0x13);
-    u8_append(&expected, 0x04);
-    u8_append(&expected, 0x25);
-    u32_append(&expected, n);
-
-    test_buffer(&eb, expected.ptr, expected.len, __func__);
-}
 #define INSTR(...) (Instruction) { __VA_ARGS__ }
 #define EXPECTED(...) __VA_ARGS__
 static bool test_instruction(const char* test_name, Instruction instruction, u8* expected_bytes, u8 expected_byte_count)
@@ -2358,18 +2288,10 @@ typedef struct FunctionBuilder
     u8 next_arg;
 } FunctionBuilder;
 
-#if 0
-Operand reserve_stack(FunctionBuilder* fn_builder, s32 size)
-{
-    fn_builder->stack_offset -= size;
-
-    return stack(fn_builder->stack_offset, size);
-}
-#else
 Value reserve_stack(FunctionBuilder* fn_builder, const Descriptor* descriptor)
 {
     // @TODO: for MSVC, we should align-patch the stack
-    u32 size = descriptor_size(descriptor);
+    s32 size = (s32)descriptor_size(descriptor);
     fn_builder->stack_offset -= size;
     Operand reserved = stack(fn_builder->stack_offset, size);
 
@@ -2379,17 +2301,10 @@ Value reserve_stack(FunctionBuilder* fn_builder, const Descriptor* descriptor)
         .operand = reserved,
     }; 
 }
-#endif
 
 void assign(FunctionBuilder* fn_builder, Operand a, Operand b)
 {
     encode(&fn_builder->eb, (Instruction) { mov, {a, b} });
-}
-
-Operand do_add(FunctionBuilder* fn_builder, Operand a, Operand b)
-{
-    encode(&fn_builder->eb, (Instruction) { add, { a, b } });
-    return a;
 }
 
 FunctionBuilder fn_begin(void)
@@ -2435,7 +2350,7 @@ void fn_return(FunctionBuilder* fn_builder, Value to_return)
 
     if (to_return.descriptor.type != DescriptorType_Void)
     {
-        u32 size = descriptor_size(&to_return.descriptor);
+        s64 size = descriptor_size(&to_return.descriptor);
         redassert(size <= OperandSize_64);
         Operand ret_reg = get_reg(size, return_registers[0]);
 
@@ -2449,56 +2364,15 @@ void fn_return(FunctionBuilder* fn_builder, Value to_return)
     encode(&fn_builder->eb, (Instruction) { ret });
 }
 
-#if 0
-void test_abstract_fn()
-{
-    FunctionBuilder fn_builder = fn_begin();
-    Operand var = reserve_stack(&fn_builder, 4);
-    assign(&fn_builder, var, reg.edi);
-    assign(&fn_builder, reg.eax, var);
-    Operand add_result = do_add(&fn_builder, reg.eax, var);
-    fn_return(&fn_builder, (const Value) { .descriptor = descriptor_integer, .operand = add_result });
-
-    u8 expected[] = { 0x55, 0x48, 0x89, 0xe5, 0x89, 0x7d, 0xfc, 0x8b, 0x45, 0xfc, 0x03, 0x45, 0xfc, 0x5d, 0xc3 };
-    test_buffer(&fn_builder.eb, expected, array_length(expected), __func__);
-
-    typedef int SumFn(int);
-    SumFn* sum = (SumFn*) fn_builder.eb.ptr;
-    int n = 5;
-    int result = sum(n);
-    print("Result %d\n", result);
-    print("Expected %d\n", n + n);
-}
-
-typedef s32 RetS32(void);
-
-RetS32* make_ret_s32(void)
-{
-    FunctionBuilder fn_builder = fn_begin();
-    Operand var = reserve_stack(&fn_builder, 4);
-    assign(&fn_builder, var, imm32(18293));
-    fn_return(&fn_builder, (const Value) {.descriptor = descriptor_integer, .operand = var });
-
-    return (RetS32*)fn_builder.eb.ptr;
-}
-
-typedef s32 ProxyFn(RetS32);
-
-// This can implement simple lambdas
-void test_proxy_fn(void)
-{
-    FunctionBuilder fn_builder = fn_begin();
-    encode(&fn_builder.eb, (Instruction) {call, {reg.rdi}});
-    fn_return(&fn_builder, (const Value) {.descriptor = descriptor_integer, .operand = reg.rax });
-
-    RetS32* ret_s32 = make_ret_s32();
-    ProxyFn* proxy_fn = (ProxyFn*)fn_builder.eb.ptr;
-    s32 result = proxy_fn(ret_s32);
-    print("Result: %d\n", result);
-}
-#endif
-
 typedef s32 s32_s32(s32);
+typedef s64 (fn_type_void_to_s64)(void);
+u64 helper_value_as_function(Value * value)
+{
+    redassert(value->operand.type == OperandType_Immediate && value->operand.size == OperandSize_64);
+    return value->operand.imm._64;
+}
+
+#define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
 
 typedef struct LabelPatch32
 {
@@ -2535,12 +2409,12 @@ LabelPatch32 make_jmp(FunctionBuilder* fn_builder)
 
 void make_jump_label(FunctionBuilder* fn_builder, LabelPatch32 patch)
 {
-    *patch.address = (fn_builder->eb.len - patch.ip);;
+    *patch.address = (s32)(fn_builder->eb.len - patch.ip);;
 }
 
 void make_jump_ip(LabelPatch32 patch, u64 current_ip)
 {
-    *patch.address = current_ip - patch.ip;
+    *patch.address = (s32)(current_ip - patch.ip);
 }
 
 Value fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
@@ -2589,13 +2463,7 @@ LabelPatch32 make_if(FunctionBuilder* fn_builder, Value conditional)
     return make_jz(fn_builder);
 }
 
-
-#define BEFORE(...) __VA_ARGS__
-#define AFTER(...) __VA_ARGS__
-#define BLOCK(_before_, _after_)\
-    for (_before_, * __dummy_index___ = 0; !(__dummy_index___++); _after_)
-
-#define IF(_value_) BLOCK(BEFORE(LabelPatch32 patch = make_if(&fn_builder, _value_)), AFTER(make_jump_label(&fn_builder, patch)))
+#define IF(_value_) for (LabelPatch32 patch = make_if(&fn_builder, _value_), *__dummy_index___ = 0; !(__dummy_index___++); make_jump_label(&fn_builder, patch))
 
 typedef enum CompareOp
 {
@@ -2620,7 +2488,6 @@ Value compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value a, Value 
             RED_NOT_IMPLEMENTED;
             break;
     }
-
 
     Value result = reserve_stack(fn_builder, (Descriptor*)&descriptor_s64);
     encode(&fn_builder->eb, (Instruction) { mov, { result.operand, reg.rax }});
@@ -2654,8 +2521,8 @@ void make_is_non_zero(void)
     fn_return(&fn_builder, (const Value) {.descriptor = descriptor_s32, .operand = imm32(1)});
     make_jump_label(&fn_builder, return_patch);
     Value fn = fn_end(&fn_builder);
+    s32_s32* function = value_as_function(&fn, s32_s32);
 
-    s32_s32* function = (s32_s32*)fn_builder.eb.ptr;
     print("Should be 0: %d\n", function(0));
     print("Should be 1: %d\n", function(-128391));
 }
@@ -2679,14 +2546,6 @@ Value make_identity_s64()
     return fn_end(&fn_builder);
 }
 
-typedef s64 (fn_type_void_to_s64)(void);
-u64 helper_value_as_function(Value * value)
-{
-    redassert(value->operand.type == OperandType_Immediate && value->operand.size == OperandSize_64);
-    return value->operand.imm._64;
-}
-
-#define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
 
 void make_simple_lambda(void)
 {
@@ -2851,10 +2710,9 @@ void test_multiply(void)
     fn_return(&fn_builder, rns_signed_mul_immediate(&fn_builder, a, b));
     Value fn = fn_end(&fn_builder);
     s64 result = value_as_function(&fn, RetS64_ParamS64_S64)(value_a, value_b);
-    printf("Result: %ld\n", result);
-    printf("Expected: %ld\n", value_a * value_b);
+    printf("Result: %I64d\n", result);
+    printf("Expected: %I64d\n", value_a * value_b);
 }
-
 
 typedef s32 RetS32_ParamS32_S32(s32, s32);
 void test_divide(void)
@@ -2902,8 +2760,8 @@ void test_array_loop(void)
     encode(&fn_builder.eb, (Instruction) { mov, {temp.operand, arg0.operand }});
 
     // @TODO: check if the descriptor is an array (@TypeCheck)
-    s32 array_len = array_descriptor.pointer_to->fixed_size_array.len;
-    u32 array_elem_size = descriptor_size(array_pointer_descriptor.pointer_to->fixed_size_array.data);
+    s64 array_len = array_pointer_descriptor.pointer_to->fixed_size_array.len;
+    s64 array_elem_size = descriptor_size(array_pointer_descriptor.pointer_to->fixed_size_array.data);
 
     Value index = reserve_stack(&fn_builder, &descriptor_s32);
     encode(&fn_builder.eb, (Instruction) { mov, {index.operand, imm32(0)}});
@@ -2923,16 +2781,15 @@ void test_array_loop(void)
         };
         encode(&fn_builder.eb, (Instruction) { inc, {pointer }});
 
-        encode(&fn_builder.eb, (Instruction) { add, { temp.operand, imm32(array_elem_size) }});
+        encode(&fn_builder.eb, (Instruction) { add, { temp.operand, imm32((u32)array_elem_size) }});
     }
 
     // @TODO: this is a do while loop
     encode(&fn_builder.eb, (Instruction) { inc, {index.operand }});
-    IF (compare(&fn_builder, Cmp_Less, index, s32_value(array_len)))
+    IF (compare(&fn_builder, Cmp_Less, index, s32_value((s32)array_len)))
     {
         make_jump_ip(make_jmp(&fn_builder), loop_start_ip);
     }
-
 
     // Loop end
     fn_return(&fn_builder, void_value);
@@ -2945,9 +2802,70 @@ void test_array_loop(void)
     redassert(array[2] == 4);
 }
 
+typedef s32 RetS32_Param_VoidP(void*);
+void test_structs(void)
+{
+    DescriptorStructField struct_fields[] = {
+        [0] = {
+            .descriptor = &descriptor_s32,
+            .offset = 0,
+        },
+        [1] = {
+            .descriptor = &descriptor_s32,
+            .offset = sizeof(s32),
+        },
+    };
+
+    DescriptorStructField* width_field = &struct_fields[0];
+    DescriptorStructField* height_field = &struct_fields[1];
+
+    Descriptor size_struct_desc = 
+    {
+        .type = DescriptorType_Struct,
+        .struct_ = 
+        {
+            .field_list = struct_fields,
+            .field_count = array_length(struct_fields),
+        },
+    };
+
+    Descriptor size_struct_pointer_desc = 
+    {
+        .type = DescriptorType_Pointer,
+        .pointer_to = &size_struct_desc,
+    };
+
+
+    FunctionBuilder fn_builder = fn_begin();
+
+    Value arg0 = fn_arg(&fn_builder, &size_struct_pointer_desc);
+    encode(&fn_builder.eb, (Instruction) { mov, { reg.rax, arg0.operand } });
+    Value height_value = {
+        .descriptor = *height_field->descriptor,
+        .operand = {
+            .type = OperandType_MemoryIndirect,
+            .size = descriptor_size(height_field->descriptor),
+            .mem_indirect = {
+                .displacement = height_field->offset,
+                .reg = reg.rax.reg,
+            },
+        },
+    };
+
+    fn_return(&fn_builder, height_value);
+
+    typedef struct { s32 width; s32 height; } size_struct;
+    size_struct a = { .width = 10, .height = 42 };
+    Value fn = fn_end(&fn_builder);
+    s32 height = value_as_function(&fn, RetS32_Param_VoidP)(&a);
+    redassert(height == a.height);
+    printf("%d\n", height);
+    printf("%d\n", a.height);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    test_array_loop();
+    test_structs();
 }
 
 s32 main(s32 argc, char* argv[])
