@@ -197,7 +197,7 @@ typedef struct DescriptorFunction
 
 typedef struct DescriptorFixedSizeArray
 {
-    struct Descriptor* data;
+    const struct Descriptor* data;
     s64 len;
 } DescriptorFixedSizeArray;
 
@@ -986,7 +986,24 @@ const InstructionEncoding imul_encoding[] =
 };
 
 const InstructionEncoding in_encoding[] = { 0 };
-const InstructionEncoding inc_encoding[] = { 0 };
+
+const InstructionEncoding inc_encoding[] =
+{
+    ENCODING(OP_CODE(0xFE), ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(NO_OPTS),             OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),     OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+    ENCODING(OP_CODE(0xFF), ENC_OPTS(.type = Digit, .digit = 0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register_Or_Memory, 32))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register_Or_Memory, 64))),
+    ),
+    ENCODING(OP_CODE(0x40), ENC_OPTS(.type = Reg),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32))),
+    ),
+};
+
 const InstructionEncoding incssp_encoding[] = { 0 };
 const InstructionEncoding ins_encoding[] = { 0 };
 const InstructionEncoding int_encoding[] = { 0 };
@@ -1843,6 +1860,7 @@ define_mnemonic(cqo);
 define_mnemonic(div_);
 define_mnemonic(idiv);
 define_mnemonic(imul);
+define_mnemonic(inc);
 
 define_mnemonic(jmp);
 
@@ -1885,6 +1903,7 @@ define_mnemonic(pop);
 define_mnemonic(push);
 define_mnemonic(ret);
 define_mnemonic(sete);
+define_mnemonic(setl);
 define_mnemonic(setz);
 define_mnemonic(sub);
 
@@ -2385,15 +2404,15 @@ FunctionBuilder fn_begin(void)
     return fn_builder;
 }
 
-Value fn_arg(FunctionBuilder* fn_builder, Descriptor arg_descriptor)
+Value fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
 {
     redassert(fn_builder->next_arg < array_length(parameter_registers));
     u32 register_index = parameter_registers[fn_builder->next_arg];
 
     Value arg = 
     {
-        .descriptor = arg_descriptor,
-        .operand = get_reg(descriptor_size(&arg_descriptor), register_index),
+        .descriptor = *arg_descriptor,
+        .operand = get_reg(descriptor_size(arg_descriptor), register_index),
     };
 
     fn_builder->next_arg++;
@@ -2516,9 +2535,12 @@ LabelPatch32 make_jmp(FunctionBuilder* fn_builder)
 
 void make_jump_label(FunctionBuilder* fn_builder, LabelPatch32 patch)
 {
-    s32 diff = (fn_builder->eb.len - patch.ip);
-    redassert(diff <= 0x80);
-    *patch.address = diff;
+    *patch.address = (fn_builder->eb.len - patch.ip);;
+}
+
+void make_jump_ip(LabelPatch32 patch, u64 current_ip)
+{
+    *patch.address = current_ip - patch.ip;
 }
 
 Value fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
@@ -2575,11 +2597,30 @@ LabelPatch32 make_if(FunctionBuilder* fn_builder, Value conditional)
 
 #define IF(_value_) BLOCK(BEFORE(LabelPatch32 patch = make_if(&fn_builder, _value_)), AFTER(make_jump_label(&fn_builder, patch)))
 
-Value equals(FunctionBuilder* fn_builder, Value a, Value b)
+typedef enum CompareOp
+{
+    Cmp_Equal,
+    Cmp_Less,
+} CompareOp;
+
+Value compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value a, Value b)
 {
     encode(&fn_builder->eb, (Instruction) { cmp, { a.operand, b.operand } });
     encode(&fn_builder->eb, (Instruction) { mov, { reg.rax, imm64(0) }});
-    encode(&fn_builder->eb, (Instruction) { setz, { reg.al }});
+
+    switch (compare_op)
+    {
+        case Cmp_Equal:
+            encode(&fn_builder->eb, (Instruction) { setz, { reg.al }});
+            break;
+        case Cmp_Less:
+            encode(&fn_builder->eb, (Instruction) { setl, { reg.al }});
+            break;
+        default:
+            RED_NOT_IMPLEMENTED;
+            break;
+    }
+
 
     Value result = reserve_stack(fn_builder, (Descriptor*)&descriptor_s64);
     encode(&fn_builder->eb, (Instruction) { mov, { result.operand, reg.rax }});
@@ -2590,13 +2631,13 @@ Value equals(FunctionBuilder* fn_builder, Value a, Value b)
 void make_is_non_zero(void)
 {
     FunctionBuilder fn_builder = fn_begin();
-    Value arg0 = fn_arg(&fn_builder, descriptor_s64);
+    Value arg0 = fn_arg(&fn_builder, &descriptor_s64);
 
     {
         LabelPatch32 return_patch;
 
         
-        IF (equals(&fn_builder, arg0, s32_value(0)))
+        IF (compare(&fn_builder, Cmp_Equal, arg0, s32_value(0)))
         {
             fn_return(&fn_builder, s64_value(0));
             return_patch = make_jmp(&fn_builder);
@@ -2633,7 +2674,7 @@ Value make_partial_application_s64(Value* original_fn, s64 arg)
 Value make_identity_s64()
 {
     FunctionBuilder fn_builder = fn_begin();
-    Value arg0 = fn_arg(&fn_builder, descriptor_s64);
+    Value arg0 = fn_arg(&fn_builder, &descriptor_s64);
     fn_return(&fn_builder, arg0);
     return fn_end(&fn_builder);
 }
@@ -2830,9 +2871,83 @@ void test_divide(void)
     printf("Expected: %d\n", value_a / value_b);
 }
 
+typedef void RetVoid_Param_P_S32(s32*);
+void test_array_loop(void)
+{
+    s32 array[] = {1, 2, 3};
+    u32 len = array_length(array);
+
+    Descriptor array_descriptor = 
+    {
+        .type = DescriptorType_FixedSizeArray,
+        .fixed_size_array =
+        {
+            .data = &descriptor_s32,
+            .len = len,
+        },
+    };
+
+    Descriptor array_pointer_descriptor =
+    {
+        .type = DescriptorType_Pointer,
+        .pointer_to = &array_descriptor,
+    };
+
+    FunctionBuilder fn_builder = fn_begin();
+
+    Value arg0 = fn_arg(&fn_builder, &array_pointer_descriptor);
+
+    // Loop begin
+    Value temp = reserve_stack(&fn_builder, &arg0.descriptor);
+    encode(&fn_builder.eb, (Instruction) { mov, {temp.operand, arg0.operand }});
+
+    // @TODO: check if the descriptor is an array (@TypeCheck)
+    s32 array_len = array_descriptor.pointer_to->fixed_size_array.len;
+    u32 array_elem_size = descriptor_size(array_pointer_descriptor.pointer_to->fixed_size_array.data);
+
+    Value index = reserve_stack(&fn_builder, &descriptor_s32);
+    encode(&fn_builder.eb, (Instruction) { mov, {index.operand, imm32(0)}});
+    s64 loop_start_ip = fn_builder.eb.len;
+
+    // loop body
+    {
+        encode(&fn_builder.eb, (Instruction) { mov, { reg.rax, temp.operand }});
+        Operand pointer = 
+        {
+            .type = OperandType_MemoryIndirect,
+            .size = array_elem_size,
+            .mem_indirect = {
+                .reg = reg.rax.reg,
+                .displacement = 0,
+            },
+        };
+        encode(&fn_builder.eb, (Instruction) { inc, {pointer }});
+
+        encode(&fn_builder.eb, (Instruction) { add, { temp.operand, imm32(array_elem_size) }});
+    }
+
+    // @TODO: this is a do while loop
+    encode(&fn_builder.eb, (Instruction) { inc, {index.operand }});
+    IF (compare(&fn_builder, Cmp_Less, index, s32_value(array_len)))
+    {
+        make_jump_ip(make_jmp(&fn_builder), loop_start_ip);
+    }
+
+
+    // Loop end
+    fn_return(&fn_builder, void_value);
+    Value fn = fn_end(&fn_builder);
+
+    value_as_function(&fn, RetVoid_Param_P_S32)(array);
+
+    redassert(array[0] == 2);
+    redassert(array[1] == 3);
+    redassert(array[2] == 4);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    test_divide();
+    test_array_loop();
 }
 
 s32 main(s32 argc, char* argv[])
