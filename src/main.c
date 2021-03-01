@@ -18,7 +18,6 @@
 #endif
 #endif
 
-#define TEST_MODE 0
 
 typedef s64 square_fn(s64);
 typedef s64 mul_fn(s64, s64);
@@ -202,22 +201,62 @@ typedef struct DescriptorFixedSizeArray
     s64 len;
 } DescriptorFixedSizeArray;
 
+typedef struct DescriptorInteger
+{
+    u32 size;
+} DescriptorInteger;
+
 struct Descriptor;
 typedef struct Descriptor
 {
     DescriptorType type;
     union
     {
+        DescriptorInteger integer;
         DescriptorFunction function;
         struct Descriptor* pointer_to;
         DescriptorFixedSizeArray fixed_size_array;
     };
 } Descriptor;
 
-Descriptor descriptor_integer = 
+const u32 pointer_size = sizeof(usize);
+
+u32 descriptor_size(const Descriptor* descriptor)
 {
-    .type = DescriptorType_Integer,
-};
+    DescriptorType type = descriptor->type;
+    switch (type)
+    {
+        case DescriptorType_Void:
+            return 0;
+        case DescriptorType_Integer:
+            return descriptor->integer.size;
+        case DescriptorType_Pointer:
+            return pointer_size;
+        case DescriptorType_FixedSizeArray:
+            return descriptor_size(descriptor->fixed_size_array.data) * descriptor->fixed_size_array.len;
+        case DescriptorType_Function:
+            return pointer_size;
+        default:
+            RED_NOT_IMPLEMENTED;
+            return 0;
+    }
+}
+
+#define define_descriptor(_type_)\
+    const Descriptor descriptor_ ## _type_ =\
+    {\
+        .type = DescriptorType_Integer,\
+        .integer = { .size = sizeof(_type_) },\
+    }
+
+define_descriptor(u8);
+define_descriptor(u16);
+define_descriptor(u32);
+define_descriptor(u64);
+define_descriptor(s8);
+define_descriptor(s16);
+define_descriptor(s32);
+define_descriptor(s64);
 
 typedef struct Value
 {
@@ -227,7 +266,7 @@ typedef struct Value
 
 Value void_value =
 {
-    .descriptor = { .type = DescriptorType_Void },
+    .descriptor = { .type = DescriptorType_Void, },
     .operand = { .type = OperandType_None },
 };
 #define reg_init(reg_index, reg_size) { .type = OperandType_Register, .size = reg_size, .reg = reg_index, }
@@ -249,13 +288,13 @@ union
     struct
     {
         /* 64-bit registers */
-        Operand rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8, r9, r10, r11, r12, r13, r14, r15;
+        const Operand rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8, r9, r10, r11, r12, r13, r14, r15;
         /* 32-bit registers */
-        Operand eax, ecx, edx, ebx, esp, ebp, esi, edi, r8d, r9d, r10d, r11d, r12d, r13d, r14d, r15d;
+        const Operand eax, ecx, edx, ebx, esp, ebp, esi, edi, r8d, r9d, r10d, r11d, r12d, r13d, r14d, r15d;
         /* 16-bit registers */
-        Operand ax, cx, dx, bx, sp, bp, si, di, r8w, r9w, r10w, r11w, r12w, r13w, r14w, r15w;
+        const Operand ax, cx, dx, bx, sp, bp, si, di, r8w, r9w, r10w, r11w, r12w, r13w, r14w, r15w;
         /* 8-bit registers */
-        Operand al, cl, dl, bl, ah, ch, dh, bh, r8b, r9b, r10b, r11b, r12b, r13b, r14b, r15b;
+        const Operand al, cl, dl, bl, ah, ch, dh, bh, r8b, r9b, r10b, r11b, r12b, r13b, r14b, r15b;
     };
 } reg =
 {
@@ -414,7 +453,7 @@ static inline Value s32_value(s32 v)
 {
     return (const Value)
     {
-        .descriptor = { .type = DescriptorType_Integer, },
+        .descriptor = descriptor_s32,
         .operand = imm32(v),
     };
 }
@@ -422,7 +461,7 @@ static inline Value s64_value(s64 v)
 {
     return (const Value)
     {
-        .descriptor = { .type = DescriptorType_Integer, },
+        .descriptor = descriptor_s64,
         .operand = imm64(v),
     };
 }
@@ -540,7 +579,7 @@ Value C_function_value(const char* proto, u64 address)
         result.descriptor.function.return_value = malloc(sizeof(Value));
         *result.descriptor.function.return_value = (const Value)
         {
-            .descriptor = descriptor_integer,
+            .descriptor = descriptor_s32,
             .operand = get_reg(OperandSize_32, return_registers[0]),
         };
     }
@@ -578,7 +617,7 @@ Value C_function_value(const char* proto, u64 address)
             {
                 if (strncmp("char", start, length) == 0)
                 {
-                    arg->descriptor = descriptor_integer;
+                    arg->descriptor = descriptor_u8,
                     result.descriptor.function.arg_list = arg;
                     result.descriptor.function.arg_count = 1;
                 }
@@ -646,12 +685,14 @@ typedef enum InstructionOptionType
     Digit,
     Reg,
     OpCodePlusReg,
+    ExplicitByteSize,
 } InstructionOptionType;
 
 typedef struct InstructionOptions
 {
     InstructionOptionType type;
     u8 digit;
+    u8 explicit_byte_size;
 } InstructionOptions;
 typedef struct InstructionEncoding
 {
@@ -725,8 +766,6 @@ const InstructionEncoding adc_encoding[] =
         ),
 };
 
-
-// @TODO:
 const InstructionEncoding adcx_encoding[] = {0};
 const InstructionEncoding add_encoding[] =
 {
@@ -864,13 +903,24 @@ const InstructionEncoding cmpxchg8b_encoding[] = { 0 };
 const InstructionEncoding cmpxchg16b_encoding[] = { 0 };
 const InstructionEncoding cpuid_encoding[] = { 0 };
 const InstructionEncoding crc32_encoding[] = { 0 };
-const InstructionEncoding cwd_cdq_cqo_encoding[] =
+
+const InstructionEncoding cwd_encoding[] =
 {
-    ENCODING(OP_CODE(0x99),ENC_OPTS(0),
-        //OP_COMB(OPTS(NO_OPTS), OPS(0)),
+    ENCODING(OP_CODE(0x99),ENC_OPTS(.explicit_byte_size = OperandSize_16),
+        OP_COMB(OPTS(0), OPS(0))),
+};
+const InstructionEncoding cdq_encoding[] =
+{
+    ENCODING(OP_CODE(0x99),ENC_OPTS(.explicit_byte_size = OperandSize_32),
+        OP_COMB(OPTS(0), OPS(0))),
+};
+const InstructionEncoding cqo_encoding[] =
+{
+    ENCODING(OP_CODE(0x99),ENC_OPTS(.explicit_byte_size = OperandSize_64),
         OP_COMB(OPTS(.rex_byte = RexW), OPS(0)),
     ),
 };
+
 const InstructionEncoding dec_encoding[] = { 0 };
 
 // unsigned division
@@ -1441,7 +1491,247 @@ const InstructionEncoding shrx_encoding[] = { 0 };
 const InstructionEncoding saveprevssp_encoding[] = { 0 };
 const InstructionEncoding sbb_encoding[] = { 0 };
 const InstructionEncoding scas_encoding[] = { 0 };
-const InstructionEncoding setcc_encoding[] = { 0 };
+
+const InstructionEncoding seta_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x97),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setae_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x93),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setb_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x92),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setbe_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x96),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setc_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x92),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding sete_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x94),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setg_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9F),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setge_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9D),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setl_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9C),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setle_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9E),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setna_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x96),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnae_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x92),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnb_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x93),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnbe_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x97),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnc_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x97),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setne_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x95),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setng_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9E),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnge_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9C),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnl_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9D),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnle_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9F),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setno_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x91),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnp_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9B),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setns_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x99),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setnz_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x95),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding seto_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x90),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setp_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9A),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setpe_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9A),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setpo_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x9B),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding sets_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x98),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
+const InstructionEncoding setz_encoding[] =
+{
+    ENCODING(OP_CODE(0x0F, 0x94),ENC_OPTS(0),
+        OP_COMB(OPTS(NO_OPTS),      OPS(OP(OET_Register_Or_Memory, 8))),
+        OP_COMB(OPTS(.rex_byte = Rex),      OPS(OP(OET_Register_Or_Memory, 8))),
+    ),
+};
+
 const InstructionEncoding setssbsy_encoding[] = { 0 };
 const InstructionEncoding sfence_encoding[] = { 0 };
 const InstructionEncoding sgdt_encoding[] = { 0 };
@@ -1547,7 +1837,9 @@ define_mnemonic(adc);
 define_mnemonic(add);
 define_mnemonic(call);
 define_mnemonic(cmp);
-define_mnemonic(cwd_cdq_cqo);
+define_mnemonic(cwd);
+define_mnemonic(cdq);
+define_mnemonic(cqo);
 define_mnemonic(div_);
 define_mnemonic(idiv);
 define_mnemonic(imul);
@@ -1592,6 +1884,8 @@ define_mnemonic(mov);
 define_mnemonic(pop);
 define_mnemonic(push);
 define_mnemonic(ret);
+define_mnemonic(sete);
+define_mnemonic(setz);
 define_mnemonic(sub);
 
 bool find_encoding(Instruction instruction, u32* encoding_index, u32* combination_index)
@@ -1703,9 +1997,11 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
 
     u8 rex_byte = combination.rex_byte;
 
+    bool r_m_encoding = false;
     for (u32 i = 0; i < array_length(instruction.operands); i++)
     {
         Operand op = instruction.operands[i];
+        OperandEncoding op_encoding = combination.operands[i];
         if (op.type == OperandType_Register && op.reg & Register_N_Flag)
         {
             if (encoding.options.type == Digit)
@@ -1716,6 +2012,10 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
             {
                 rex_byte |= RexB;
             }
+        }
+        else if (op_encoding.type == OET_Register_Or_Memory)
+        {
+            r_m_encoding = true;
         }
     }
 
@@ -1742,9 +2042,9 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     u8 sib_byte = 0;
     bool is_digit = encoding.options.type == Digit;
     bool is_reg = encoding.options.type == Reg;
-    bool need_mod_rm = is_digit || is_reg;
+    bool need_mod_rm = is_digit || is_reg || r_m_encoding;
 
-    u8 register_or_digit;
+    u8 register_or_digit = 0;
     u8 r_m = 0;
     u8 mod = 0;
     u8 mod_r_m = 0;
@@ -1817,7 +2117,7 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     {
         u8_append(eb, rex_byte);
     }
-    else if ((instruction.operands[0].type == OperandType_Register && instruction.operands[0].size == OperandSize_16) || (instruction.operands[1].type == OperandType_Register && instruction.operands[1].size == OperandSize_16))
+    else if ((instruction.operands[0].type == OperandType_Register && instruction.operands[0].size == OperandSize_16) || (instruction.operands[1].type == OperandType_Register && instruction.operands[1].size == OperandSize_16) || encoding.options.explicit_byte_size == OperandSize_16)
     {
         u8_append(eb, OperandSizeOverride);
     }
@@ -2047,12 +2347,13 @@ Operand reserve_stack(FunctionBuilder* fn_builder, s32 size)
     return stack(fn_builder->stack_offset, size);
 }
 #else
-Value reserve_stack(FunctionBuilder* fn_builder, Descriptor* descriptor)
+Value reserve_stack(FunctionBuilder* fn_builder, const Descriptor* descriptor)
 {
-    // @TODO: don't hardcode the size
-    u32 size = 8;
+    // @TODO: for MSVC, we should align-patch the stack
+    u32 size = descriptor_size(descriptor);
     fn_builder->stack_offset -= size;
     Operand reserved = stack(fn_builder->stack_offset, size);
+
     return (const Value)
     {
         .descriptor = *descriptor,
@@ -2087,13 +2388,12 @@ FunctionBuilder fn_begin(void)
 Value fn_arg(FunctionBuilder* fn_builder, Descriptor arg_descriptor)
 {
     redassert(fn_builder->next_arg < array_length(parameter_registers));
-    // @TODO: hardcoded 64-bit register
-    u32 size_index = register_size_jump_table[OperandSize_64];
     u32 register_index = parameter_registers[fn_builder->next_arg];
+
     Value arg = 
     {
         .descriptor = arg_descriptor,
-        .operand = reg.arr[size_index][register_index],
+        .operand = get_reg(descriptor_size(&arg_descriptor), register_index),
     };
 
     fn_builder->next_arg++;
@@ -2113,14 +2413,12 @@ Value fn_end(FunctionBuilder* fn_builder)
 void fn_return(FunctionBuilder* fn_builder, Value to_return)
 {
     *fn_builder->descriptor.return_value = to_return;
-    // @TODO: hardcoded 64-bit register
-    // @TODO: Check all paths return the same type
 
     if (to_return.descriptor.type != DescriptorType_Void)
     {
-        u32 size_index = register_size_jump_table[OperandSize_64];
-        u32 register_index = return_registers[0];
-        Operand ret_reg = reg.arr[size_index][register_index];
+        u32 size = descriptor_size(&to_return.descriptor);
+        redassert(size <= OperandSize_64);
+        Operand ret_reg = get_reg(size, return_registers[0]);
 
         if (memcmp(&ret_reg, &to_return.operand, sizeof(to_return)) != 0)
         {
@@ -2198,6 +2496,15 @@ LabelPatch32 make_jnz(FunctionBuilder* fn_builder)
     return (LabelPatch32) { patch, ip };
 }
 
+LabelPatch32 make_jz(FunctionBuilder* fn_builder)
+{
+    encode(&fn_builder->eb, (Instruction) { jz, { rel32(0xcccccccc) } });
+    s64 ip = fn_builder->eb.len;
+    s32* patch = (s32*)&fn_builder->eb.ptr[ip - sizeof(u32)];
+
+    return (LabelPatch32) { patch, ip };
+}
+
 LabelPatch32 make_jmp(FunctionBuilder* fn_builder)
 {
     encode(&fn_builder->eb, (Instruction) { jmp, { rel32(0xcccccccc) } });
@@ -2220,11 +2527,10 @@ Value fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_c
     redassert(fn->descriptor.function.arg_list);
     redassert(fn->descriptor.function.arg_count == arg_count);
     // @TODO: type-check arguments
-    u32 size_index = register_size_jump_table[OperandSize_64];
     for (s64 i = 0; i < arg_count; i++)
     {
-        u32 register_index_param = parameter_registers[i];
-        Operand param_reg = reg.arr[size_index][register_index_param];
+        Value arg = arg_list[i];
+        Operand param_reg = get_reg(descriptor_size(&arg.descriptor), parameter_registers[i]);
         encode(&fn_builder->eb, (Instruction) {mov, {param_reg, arg_list[i].operand }});
     }
 
@@ -2234,16 +2540,77 @@ Value fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_c
     return *fn->descriptor.function.return_value;
 }
 
+LabelPatch32 make_if(FunctionBuilder* fn_builder, Value conditional)
+{
+    Operand imm;
+    switch (conditional.operand.size)
+    {
+        case OperandSize_8:
+            imm = imm8(0);
+            break;
+        case OperandSize_16:
+            imm = imm16(0);
+            break;
+        case OperandSize_32:
+            imm = imm32(0);
+            break;
+        case OperandSize_64:
+            imm = imm64(0);
+            break;
+        default:
+            redassert(false);
+            imm = (const Operand){0};
+            break;
+    }
+    encode(&fn_builder->eb, (Instruction) { cmp, { conditional.operand, imm8(0)}});
+
+    return make_jz(fn_builder);
+}
+
+
+#define BEFORE(...) __VA_ARGS__
+#define AFTER(...) __VA_ARGS__
+#define BLOCK(_before_, _after_)\
+    for (_before_, * __dummy_index___ = 0; !(__dummy_index___++); _after_)
+
+#define IF(_value_) BLOCK(BEFORE(LabelPatch32 patch = make_if(&fn_builder, _value_)), AFTER(make_jump_label(&fn_builder, patch)))
+
+Value equals(FunctionBuilder* fn_builder, Value a, Value b)
+{
+    encode(&fn_builder->eb, (Instruction) { cmp, { a.operand, b.operand } });
+    encode(&fn_builder->eb, (Instruction) { mov, { reg.rax, imm64(0) }});
+    encode(&fn_builder->eb, (Instruction) { setz, { reg.al }});
+
+    Value result = reserve_stack(fn_builder, (Descriptor*)&descriptor_s64);
+    encode(&fn_builder->eb, (Instruction) { mov, { result.operand, reg.rax }});
+
+    return result;
+}
+
 void make_is_non_zero(void)
 {
     FunctionBuilder fn_builder = fn_begin();
-    Value n = fn_arg(&fn_builder, descriptor_integer);
-    encode(&fn_builder.eb, (Instruction) { cmp, { n.operand, imm32(0) } });
+    Value arg0 = fn_arg(&fn_builder, descriptor_s64);
+
+    {
+        LabelPatch32 return_patch;
+
+        
+        IF (equals(&fn_builder, arg0, s32_value(0)))
+        {
+            fn_return(&fn_builder, s64_value(0));
+            return_patch = make_jmp(&fn_builder);
+        }
+
+        fn_return(&fn_builder, s64_value(1));
+        make_jump_label(&fn_builder, return_patch);
+    }
+
     LabelPatch32 patch = make_jnz(&fn_builder);
-    fn_return(&fn_builder, (const Value) {.descriptor = descriptor_integer, .operand = imm32(0)} );
+    fn_return(&fn_builder, (const Value) {.descriptor = descriptor_s32, .operand = imm32(0)} );
     LabelPatch32 return_patch = make_jmp(&fn_builder);
     make_jump_label(&fn_builder, patch);
-    fn_return(&fn_builder, (const Value) {.descriptor = descriptor_integer, .operand = imm32(1)});
+    fn_return(&fn_builder, (const Value) {.descriptor = descriptor_s32, .operand = imm32(1)});
     make_jump_label(&fn_builder, return_patch);
     Value fn = fn_end(&fn_builder);
 
@@ -2266,7 +2633,7 @@ Value make_partial_application_s64(Value* original_fn, s64 arg)
 Value make_identity_s64()
 {
     FunctionBuilder fn_builder = fn_begin();
-    Value arg0 = fn_arg(&fn_builder, descriptor_integer);
+    Value arg0 = fn_arg(&fn_builder, descriptor_s64);
     fn_return(&fn_builder, arg0);
     return fn_end(&fn_builder);
 }
@@ -2297,7 +2664,7 @@ void print_fn(void)
         .type = DescriptorType_FixedSizeArray,
         .fixed_size_array =
         {
-            .data = &descriptor_integer,
+            .data = (Descriptor*)&descriptor_u8,
             .len = strlen(message) + 1,
         },
     };
@@ -2379,14 +2746,28 @@ static inline Value rns_signed_div(FunctionBuilder* fn_builder, Value a, Value b
     Operand reg1 = get_reg(max_size, Register_A);
 
     // Signed division stores the remainder in the D register
-    Value rdx_temp = reserve_stack(fn_builder, &a.descriptor);
+    Value rdx_temp = reserve_stack(fn_builder, &descriptor_s64);
     encode(&fn_builder->eb, (Instruction) { mov, {rdx_temp.operand, reg.rdx }} );
 
     encode(&fn_builder->eb, (Instruction) { mov, {reg1, a.operand }} );
 
     Operand b_operand = get_reg(b.operand.size, Register_B);
     encode(&fn_builder->eb, (Instruction) { mov, {b_operand, b.operand }});
-    encode(&fn_builder->eb, (Instruction) { cwd_cdq_cqo, {0}});
+    switch (descriptor_size(&a.descriptor))
+    {
+        case OperandSize_16:
+            encode(&fn_builder->eb, (Instruction) { cwd, {0}});
+            break;
+        case OperandSize_32:
+            encode(&fn_builder->eb, (Instruction) { cdq, {0}});
+            break;
+        case OperandSize_64:
+            encode(&fn_builder->eb, (Instruction) { cqo, {0}});
+            break;
+        default:
+            RED_NOT_IMPLEMENTED;
+    }
+
     encode(&fn_builder->eb, (Instruction) { idiv, {b_operand}});
 
     Value temporary_value = reserve_stack(fn_builder, &a.descriptor);
@@ -2433,18 +2814,20 @@ void test_multiply(void)
     printf("Expected: %ld\n", value_a * value_b);
 }
 
+
+typedef s32 RetS32_ParamS32_S32(s32, s32);
 void test_divide(void)
 {
-    s64 value_a = 40;
-    s64 value_b = 5;
+    s32 value_a = 40;
+    s32 value_b = 5;
     FunctionBuilder fn_builder = fn_begin();
-    Value a = s64_value(value_a);
-    Value b = s64_value(value_b);
+    Value a = s32_value(value_a);
+    Value b = s32_value(value_b);
     fn_return(&fn_builder, rns_signed_div(&fn_builder, a, b));
     Value fn = fn_end(&fn_builder);
-    s64 result = value_as_function(&fn, RetS64_ParamS64_S64)(value_a, value_b);
-    printf("Result: %ld\n", result);
-    printf("Expected: %ld\n", value_a / value_b);
+    s32 result = value_as_function(&fn, RetS32_ParamS32_S32)(value_a, value_b);
+    printf("Result: %d\n", result);
+    printf("Expected: %d\n", value_a / value_b);
 }
 
 void wna_main(s32 argc, char* argv[])
@@ -2454,6 +2837,7 @@ void wna_main(s32 argc, char* argv[])
 
 s32 main(s32 argc, char* argv[])
 {
+#define TEST_MODE 0
 #if TEST_MODE
     test_main(argc, argv);
 #else
