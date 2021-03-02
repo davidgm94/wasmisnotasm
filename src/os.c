@@ -585,7 +585,7 @@ void* reallocate_chunk(void* allocated_address, s64 size)
     
     Allocation* allocation_metadata = find_allocation_metadata(allocated_address);
     usize difference = (uptr)allocated_address - (uptr)allocation_metadata;
-    usize real_size = allocation_metadata->size - difference;
+    s64 real_size = allocation_metadata->size - (s64)difference;
     redassert(real_size < size);
     void* new_address = allocate_chunk(size);
     memcpy(new_address, allocated_address, real_size);
