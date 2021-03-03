@@ -250,7 +250,7 @@ typedef struct Descriptor
     {
         DescriptorInteger integer;
         DescriptorFunction function;
-        struct Descriptor* pointer_to;
+        const struct Descriptor* pointer_to;
         DescriptorFixedSizeArray fixed_size_array;
         DescriptorStruct struct_;
     };
@@ -316,16 +316,50 @@ define_descriptor(s16);
 define_descriptor(s32);
 define_descriptor(s64);
 
+Descriptor* descriptor_pointer_to(const Descriptor* descriptor)
+{
+    Descriptor* result = NEW(Descriptor, 1);
+    *result = (const Descriptor){
+        .type = DescriptorType_Pointer,
+        .pointer_to = descriptor,
+    };
+    return result;
+}
+
+Descriptor* descriptor_array_of(const Descriptor* descriptor, s64 len)
+{
+    Descriptor* result = NEW(Descriptor, 1);
+    *result = (const Descriptor){
+        .type = DescriptorType_FixedSizeArray,
+        .fixed_size_array = {
+            .data = descriptor,
+            .len = len,
+        },
+    };
+    return result;
+}
+
 typedef struct Value
 {
-    Descriptor descriptor;
+    Descriptor* descriptor;
     Operand operand;
 } Value;
 
+void assert_not_register(Value* value, Register r)
+{
+    redassert(value);
+    if (value->operand.type == OperandType_Register)
+    {
+        redassert(value->operand.reg != r);
+    }
+}
+Descriptor descriptor_void =
+{
+    .type = DescriptorType_Void,
+};
 Value _void_value_v =
 {
-    .descriptor = { .type = DescriptorType_Void, },
-    .operand = { .type = OperandType_None },
+    .descriptor = &descriptor_void,
 };
 Value* void_value = &_void_value_v;
 
@@ -520,7 +554,7 @@ static inline Value* reg_value(Register reg, const Descriptor* descriptor)
 
     Value* result = NEW(Value, 1);
     *result = (Value){
-        .descriptor = *descriptor,
+        .descriptor = (Descriptor*)descriptor,
         .operand = get_reg(size, reg),
     };
 
@@ -532,7 +566,7 @@ static inline Value* s32_value(s32 v)
     Value* result = NEW(Value, 1);
     *result = (const Value)
     {
-        .descriptor = descriptor_s32,
+        .descriptor = (Descriptor*)&descriptor_s32,
         .operand = imm32(v),
     };
     return result;
@@ -542,21 +576,12 @@ static inline Value* s64_value(s64 v)
     Value* result = NEW(Value, 1);
     *result = (const Value)
     {
-        .descriptor = descriptor_s64,
+        .descriptor = (Descriptor*)&descriptor_s64,
         .operand = imm64(v),
     };
     return result;
 }
 
-Descriptor* descriptor_pointer_to(Descriptor* descriptor)
-{
-    Descriptor* result = NEW(Descriptor, 1);
-    *result = (const Descriptor){
-        .type = DescriptorType_Pointer,
-        .pointer_to = descriptor,
-    };
-    return result;
-}
 #if 0
 static inline Value* pointer_value(u64 address)
 {
@@ -569,12 +594,12 @@ static inline Value* pointer_value(u64 address)
     return result;
 }
 #else
-static inline Value* pointer_value(u64 address)
+static inline Value* pointer_value(const Descriptor* child_descriptor, u64 address)
 {
     Value* result = NEW(Value, 1);
     *result = (const Value)
     {
-        .descriptor = { .type = DescriptorType_Pointer, },
+        .descriptor = descriptor_pointer_to(child_descriptor),
         .operand = imm64(address),
     };
     return result;
@@ -662,45 +687,123 @@ const Register preserved_registers[] =
 };
 #endif
 
+Descriptor* C_parse_type(const char* type_str, s64 length)
+{
+    Descriptor* descriptor = null;
+
+    for (u32 i = 0; i < length; i++)
+    {
+        if (!(type_str[i] == ' ' || type_str[i] == ')' || type_str[i] == '*'))
+        {
+            continue;
+        }
+
+        if (i != 0)
+        {
+            if (strncmp(type_str, "char", i + 1) == 0)
+            {
+                descriptor = (Descriptor*)&descriptor_u8;
+            }
+            else if (strncmp(type_str, "int", i + 1) == 0)
+            {
+                descriptor = (Descriptor*)&descriptor_s32;
+            }
+            else if (strncmp(type_str, "void", i + 1) == 0)
+            {
+                descriptor = (Descriptor*)&descriptor_void;
+            }
+            else if (strncmp(type_str, "const", i + 1) == 0)
+            {
+                // @TODO: support const values
+            }
+            else
+            {
+                redassert(!"Unsupported argument type");
+            }
+        }
+        
+        if (type_str[i] == '*')
+        {
+            redassert(descriptor);
+            Descriptor* previous_descriptor = descriptor;
+            descriptor = NEW(Descriptor, 1);
+            *descriptor = (const Descriptor){
+                .type = DescriptorType_Pointer,
+                .pointer_to = previous_descriptor,
+            };
+
+        }
+
+        type_str++;
+    }
+
+    return descriptor;
+}
+
+Value* C_function_return_value(const char* prototype)
+{
+    char* ch = strchr(prototype, '(');
+    redassert(ch);
+    --ch;
+
+    // skip whitespace before (
+    for (; *ch == ' '; --ch);
+    for (;
+        (*ch >= 'a' && *ch <= 'z') ||
+        (*ch >= 'A' && *ch <= 'Z') ||
+        (*ch >= '0' && *ch <= '9') ||
+        *ch == '_';
+        --ch
+        )
+        // skip whitespace before function name
+        for (; *ch == ' '; --ch);
+    ++ch;
+    Descriptor* descriptor = C_parse_type(prototype, ch - prototype);
+    redassert(descriptor);
+    switch (descriptor->type) {
+        case DescriptorType_Void: {
+            return void_value;
+        }
+        case DescriptorType_Function:
+        case DescriptorType_Integer:
+        case DescriptorType_Pointer: {
+            Value* return_value = NEW(Value, 1);
+            *return_value = (const Value){
+              .descriptor = descriptor,
+              .operand = reg.rax,
+            };
+            return return_value;
+        }
+        default: {
+            redassert(!"Unsupported return type");
+        }
+    }
+    return null;
+}
 
 Value* C_function_value(const char* proto, u64 address)
 {
+    Descriptor* descriptor = NEW(Descriptor, 1);
+    *descriptor = (const Descriptor){
+        .type = DescriptorType_Function,
+        .function = {0},
+    };
+
     Value* result = NEW(Value, 1);
-    *result = (const Value)
-    {
-        .descriptor = { .type = DescriptorType_Function, },
+    *result = (const Value){
+        .descriptor = descriptor,
         .operand = imm64(address),
     };
 
-    if (strstr(proto, "void") == proto)
-    {
-        result->descriptor.function.return_value = void_value;
-    }
-    else if (strstr(proto, "int") == proto)
-    {
-        result->descriptor.function.return_value = NEW(Value, 1);
-        *result->descriptor.function.return_value = (const Value)
-        {
-            .descriptor = descriptor_s32,
-            .operand = get_reg(OperandSize_32, return_registers[0]),
-        };
-    }
-    else
-    {
-        redassert(!"Unknown return type");
-    }
+    result->descriptor->function.return_value = C_function_return_value(proto);
 
-    char* it = strchr(proto, '(');
+    char* it = strchr(proto, 'C');
     redassert(it);
     it++;
 
     char* start = it;
 
-    Value* arg = NEW(Value, 1);
-    *arg = (const Value)
-    {
-        .operand = get_reg(OperandSize_8, parameter_registers[0]),
-    };
+    Descriptor* argument_descriptor = null;
 
     for(; *it; it++)
     {
@@ -714,35 +817,20 @@ Value* C_function_value(const char* proto, u64 address)
 
             if (start != it)
             {
-                if (strncmp("char", start, length) == 0)
-                {
-                    arg->descriptor = descriptor_u8,
-                    result->descriptor.function.arg_list = arg;
-                    result->descriptor.function.arg_count = 1;
-                }
-                else if (strncmp("const", start, length) == 0)
-                {
-                    // @TODO
-                }
-                else
-                {
-                    redassert("Unsupported argument type");
-                }
+                argument_descriptor = C_parse_type(start, length);
             }
-
             start = it + 1;
-
-            if (*it == '*')
-            {
-                Descriptor* prev_desc = NEW(Descriptor, 1);
-                *prev_desc = arg->descriptor;
-                arg->descriptor = (const Descriptor)
-                {
-                    .type = DescriptorType_Pointer,
-                        .pointer_to = prev_desc,
-                };
-            }
         }
+    }
+
+    if (argument_descriptor && argument_descriptor->type != DescriptorType_Void)
+    {
+        Value* arg = NEW(Value, 1);
+        arg->descriptor = argument_descriptor;
+        arg->operand = get_reg(OperandSize_64, parameter_registers[0]);
+
+        result->descriptor->function.arg_list = arg;
+        result->descriptor->function.arg_count = 1;
     }
 
     return result;
@@ -2117,10 +2205,56 @@ typedef struct FunctionBuilder
     s64 stack_displacement_count;
 
     JumpPatchList* return_patch_list;
+    Value** result;
     s32 stack_offset;
     u32 max_call_parameter_stack_size;
     u8 next_arg;
+    bool done;
 } FunctionBuilder;
+
+bool typecheck(const Descriptor* a, const Descriptor* b)
+{
+    if (a->type != b->type)
+    {
+        return false;
+    }
+
+    switch (a->type)
+    {
+        case DescriptorType_Function:
+            if (a->function.arg_count != b->function.arg_count)
+            {
+                return false;
+            }
+            if (!typecheck(a->function.return_value->descriptor, b->function.return_value->descriptor))
+            {
+                return false;
+            }
+
+            for (s64 i = 0; i < a->function.arg_count; i++)
+            {
+                if (!typecheck(a->function.arg_list[i].descriptor, b->function.arg_list[i].descriptor))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        case DescriptorType_Struct:
+            return a == b;
+        case DescriptorType_FixedSizeArray:
+            return typecheck(a->fixed_size_array.data, b->fixed_size_array.data) && a->fixed_size_array.len == b->fixed_size_array.len;
+        case DescriptorType_Pointer:
+            return typecheck(a->pointer_to, b->pointer_to);
+        default:
+            return descriptor_size(a) == descriptor_size(b);
+    }
+}
+
+bool typecheck_values(Value* a, Value* b)
+{
+    return typecheck(a->descriptor, b->descriptor);
+}
 
 void encode(FunctionBuilder* fn_builder, Instruction instruction)
 {
@@ -2370,7 +2504,7 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
 
 #define Function(_name_)\
 Value* _name_ = NULL;\
-for (FunctionBuilder fn_builder = fn_begin(); !(_name_); _name_ = fn_end(&fn_builder))
+for (FunctionBuilder fn_builder = fn_begin(&_name_); !(fn_builder.done); fn_end(&fn_builder))
 
 #define Return(_value_)\
 fn_return(&fn_builder, _value_)
@@ -2480,7 +2614,7 @@ Value* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
 
     Value* result = NEW(Value, 1);
     *result = (const Value) {
-        .descriptor = *descriptor,
+        .descriptor = (Descriptor*)descriptor,
         .operand = reserved,
     }; 
 
@@ -2489,7 +2623,28 @@ Value* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
 
 void move_value(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    encode(fn_builder, (Instruction) { mov, {a->operand, b->operand} });
+    s64 a_size = descriptor_size(a->descriptor);
+    s64 b_size = descriptor_size(b->descriptor);
+
+    if (a_size != b_size)
+    {
+        if (!(b->operand.type == OperandType_Immediate && b_size == sizeof(s32) && a_size == sizeof(s64)))
+        {
+            redassert(!"Mismatched operand size when moving");
+        }
+    }
+
+    if ((b_size == OperandSize_64 && b->operand.type == OperandType_Immediate && a->operand.type != OperandType_Register) || (a->operand.type == OperandType_MemoryIndirect && b->operand.type == OperandType_MemoryIndirect))
+    {
+        // @TODO: This could be a problem if RAX is used as a temporary value
+        Value* reg_a = reg_value(Register_A, a->descriptor);
+        encode(fn_builder, (Instruction) { mov, { reg_a->operand, b->operand } });
+        encode(fn_builder, (Instruction) { mov, { a->operand, reg_a->operand } });
+    }
+    else
+    {
+        encode(fn_builder, (Instruction) { mov, { a->operand, b->operand } });
+    }
 }
 
 LabelPatch32 make_jnz(FunctionBuilder* fn_builder)
@@ -2547,13 +2702,25 @@ void resolve_jump_patch_list(FunctionBuilder* fn_builder, JumpPatchList* list)
     }
 }
 
-FunctionBuilder fn_begin(void)
+FunctionBuilder fn_begin(Value** result)
 {
     FunctionBuilder fn_builder =
     {
-        .eb = give_me(1024)
+        .eb = give_me(1024),
+        .result = result,
+    };
+    Descriptor* descriptor = NEW(Descriptor, 1);
+    *descriptor = (const Descriptor){
+        .type = DescriptorType_Function,
+        .function = fn_builder.descriptor,
     };
 
+    *result = NEW(Value, 1);
+    **result = (const Value)
+    {
+        .descriptor = descriptor,
+        .operand = imm64((u64)fn_builder.eb.ptr),
+    };
     // @Volatile @ArgCount
     fn_builder.descriptor.arg_list = NEW(Value, 16);
     fn_builder.descriptor.return_value = NEW(Value, 1);
@@ -2575,7 +2742,15 @@ FunctionBuilder fn_begin(void)
     return fn_builder;
 }
 
-Value* fn_end(FunctionBuilder* fn_builder)
+Descriptor* fn_update_result(FunctionBuilder* fn_builder)
+{
+    fn_builder->descriptor.arg_count = fn_builder->next_arg;
+    Descriptor* descriptor = (*fn_builder->result)->descriptor;
+    descriptor->function = fn_builder->descriptor;
+    return descriptor;
+}
+
+void fn_end(FunctionBuilder* fn_builder)
 {
     switch (calling_convention)
     {
@@ -2622,18 +2797,14 @@ Value* fn_end(FunctionBuilder* fn_builder)
             break;
     }
 
-    fn_builder->descriptor.arg_count = fn_builder->next_arg;
-    Value* result = NEW(Value, 1);
-    *result = (const Value)
-    {
-        .descriptor = {
-            .type = DescriptorType_Function,
-            .function = fn_builder->descriptor,
-        },
-        .operand = imm64((u64)fn_builder->eb.ptr),
-    };
+    Descriptor* descriptor = fn_update_result(fn_builder);
 
-    return result;
+    if (!descriptor->function.return_value->descriptor)
+    {
+        descriptor->function.return_value->descriptor = &descriptor_void;
+    }
+
+    fn_builder->done = true;
 }
 
 Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
@@ -2655,7 +2826,7 @@ Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
                 s64 offset = arg_index * 8;
 
                 fn_builder->descriptor.arg_list[arg_index] = (const Value){
-                    .descriptor = *arg_descriptor,
+                    .descriptor = (Descriptor*)arg_descriptor,
                     .operand = stack((s32)offset, (s32)arg_size),
                 };
                 break;
@@ -2666,16 +2837,18 @@ Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
         }
     }
 
+    fn_update_result(fn_builder);
+
     return &fn_builder->descriptor.arg_list[arg_index];
 };
 
 Value* fn_return(FunctionBuilder* fn_builder, const Value* to_return)
 {
-    if (to_return->descriptor.type != DescriptorType_Void)
+    if (to_return->descriptor->type != DescriptorType_Void)
     {
-        s64 size = descriptor_size(&to_return->descriptor);
+        s64 size = descriptor_size(to_return->descriptor);
         redassert(size <= OperandSize_64);
-        Value* ret_reg = reg_value(return_registers[0], &to_return->descriptor);
+        Value* ret_reg = reg_value(return_registers[0], to_return->descriptor);
 
         if (memcmp(&ret_reg->operand, &to_return->operand, sizeof(Operand)) != 0)
         {
@@ -2705,28 +2878,34 @@ u64 helper_value_as_function(Value* value)
 
 Value* call_fn_value(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
 {
-    DescriptorFunction* descriptor = &fn->descriptor.function;
-    redassert(fn->descriptor.type == DescriptorType_Function);
+    DescriptorFunction* descriptor = &fn->descriptor->function;
+    redassert(fn->descriptor->type == DescriptorType_Function);
     redassert(descriptor->arg_count == arg_count);
     // @TODO: type-check arguments
 
     for (s64 i = 0; i < arg_count; i++)
     {
-        redassert(descriptor->arg_list[i].descriptor.type == arg_list[i].descriptor.type);
-        encode(fn_builder, (Instruction) {mov, {descriptor->arg_list[i].operand, arg_list[i].operand }});
+        redassert(descriptor->arg_list[i].descriptor->type == arg_list[i].descriptor->type);
+        move_value(fn_builder, &descriptor->arg_list[i], &arg_list[i]);
     }
 
     u32 parameter_stack_size = (u32)MAX(4, arg_count) * 8;
     fn_builder->max_call_parameter_stack_size = MAX(fn_builder->max_call_parameter_stack_size, parameter_stack_size);
 
-    encode(fn_builder, (Instruction) {mov, {reg.rax, fn->operand }});
-    encode(fn_builder, (Instruction) {call, {reg.rax}});
+    Value* reg_a = reg_value(Register_A, fn->descriptor);
+    move_value(fn_builder, reg_a, fn);
+    encode(fn_builder, (Instruction) { call, { reg_a->operand } });
 
-    return fn->descriptor.function.return_value;
+    Value* result = stack_reserve(fn_builder, descriptor->return_value->descriptor);
+    move_value(fn_builder, result, descriptor->return_value);
+
+    return result;
 }
 
 LabelPatch32 make_if(FunctionBuilder* fn_builder, Value* conditional)
 {
+    // @TODO: is this needed?
+#if 0
     Operand imm;
     switch (conditional->operand.size)
     {
@@ -2747,6 +2926,7 @@ LabelPatch32 make_if(FunctionBuilder* fn_builder, Value* conditional)
             imm = (const Operand){0};
             break;
     }
+#endif
     encode(fn_builder, (Instruction) { cmp, { conditional->operand, imm8(0)}});
 
     return make_jz(fn_builder);
@@ -2848,8 +3028,20 @@ typedef enum CompareOp
 
 Value* compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value* a, Value* b)
 {
-    encode(fn_builder, (Instruction) { cmp, { a->operand, b->operand } });
-    encode(fn_builder, (Instruction) { mov, { reg.rax, imm64(0) }});
+    redassert(typecheck_values(a, b));
+    // @TODO: check if the types are comparable
+
+    Value* temp_b = stack_reserve(fn_builder, b->descriptor);
+    move_value(fn_builder, temp_b, b);
+
+    Value* reg_a = reg_value(Register_A, a->descriptor);
+    move_value(fn_builder, reg_a, a);
+
+    encode(fn_builder, (Instruction) { cmp, { reg_a->operand, temp_b->operand } });
+
+    // @TODO: use xor
+    reg_a = reg_value(Register_A, &descriptor_s64);
+    move_value(fn_builder, reg_a, s64_value(0));
 
     switch (compare_op)
     {
@@ -2868,11 +3060,12 @@ Value* compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value* a, Valu
     }
 
     Value* result = stack_reserve(fn_builder, (Descriptor*)&descriptor_s64);
-    encode(fn_builder, (Instruction) { mov, { result->operand, reg.rax }});
+    move_value(fn_builder, result, reg_a);
 
     return result;
 }
 
+#if 0
 void make_is_non_zero(void)
 {
     FunctionBuilder fn_builder = fn_begin();
@@ -2893,10 +3086,10 @@ void make_is_non_zero(void)
     }
 
     LabelPatch32 patch = make_jnz(&fn_builder);
-    fn_return(&fn_builder, &(const Value) {.descriptor = descriptor_s32, .operand = imm32(0)} );
+    fn_return(&fn_builder, s32_value(0));
     LabelPatch32 return_patch = make_jmp(&fn_builder);
     make_jump_label(&fn_builder, patch);
-    fn_return(&fn_builder, &(const Value) {.descriptor = descriptor_s32, .operand = imm32(1)});
+    fn_return(&fn_builder, s32_value(1));
     make_jump_label(&fn_builder, return_patch);
     Value* fn = fn_end(&fn_builder);
     s32_s32* function = value_as_function(fn, s32_s32);
@@ -2945,7 +3138,7 @@ void print_fn(void)
 
     Value* puts_value = C_function_value("int(char*)", (u64)&puts);
     FunctionBuilder fn_builder = fn_begin();
-    Value* message_value = pointer_value((u64)message);
+    Value* message_value = pointer_value(&descriptor_u8, (u64)message);
 
     call_fn_value(&fn_builder, puts_value, message_value, 1);
 
@@ -2955,30 +3148,24 @@ void print_fn(void)
     value_as_function(fn_value, VoidRetVoid)();
 }
 
-void assert_not_a_register(Value* value)
+#endif
+
+Value* rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic arithmetic_instruction, Value* a, Value* b)
 {
-    redassert(value);
-    if (value->operand.type == OperandType_Register)
-    {
-        redassert(value->operand.reg != Register_A);
-    }
-}
+    redassert(typecheck_values(a, b));
+    redassert(a->descriptor->type == DescriptorType_Integer);
+    assert_not_register(a, Register_A);
+    assert_not_register(b, Register_A);
 
-Value* rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic mnemonic, Value* a, Value* b)
-{
-    assert_not_a_register(a);
-    assert_not_a_register(b);
+    Value* temp_b = stack_reserve(fn_builder, b->descriptor);
+    move_value(fn_builder, temp_b, b);
+    Value* reg_a = reg_value(Register_A, a->descriptor);
+    move_value(fn_builder, reg_a, a);
 
-    u32 max_size = MAX(a->operand.size, b->operand.size);
-    Operand reg1 = get_reg(max_size, Register_A);
-    Operand reg2 = get_reg(max_size, Register_B);
+    encode(fn_builder, (Instruction) { arithmetic_instruction, {reg_a->operand, temp_b->operand }} );
 
-    encode(fn_builder, (Instruction) { mov, {reg1, a->operand }} );
-    encode(fn_builder, (Instruction) { mov, {reg2, b->operand }} );
-    encode(fn_builder, (Instruction) { mnemonic, {reg1, reg2 }} );
-
-    Value* temporary_value = stack_reserve(fn_builder, &a->descriptor);
-    encode(fn_builder, (Instruction) { mov, { temporary_value->operand, reg1 }} );
+    Value* temporary_value = stack_reserve(fn_builder, a->descriptor);
+    move_value(fn_builder, temporary_value, reg_a);
 
     return temporary_value;
 }
@@ -2995,39 +3182,47 @@ static inline Value* rns_sub(FunctionBuilder* fn_builder, Value* a, Value* b)
 
 Value* rns_signed_mul_immediate(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    assert_not_a_register(a);
-    assert_not_a_register(b);
+    redassert(typecheck_values(a, b));
+    redassert(a->descriptor->type == DescriptorType_Integer);
+
+    assert_not_register(a, Register_A);
+    assert_not_register(b, Register_A);
     redassert(b->operand.type == OperandType_Immediate && b->operand.size <= OperandSize_32);
 
-    u32 max_size = MAX(a->operand.size, b->operand.size);
-    Operand reg1 = get_reg(max_size, Register_A);
+    Value* reg_a = reg_value(Register_A, b->descriptor);
+    Value* b_temp = stack_reserve(fn_builder, b->descriptor);
+    move_value(fn_builder, reg_a, b);
+    move_value(fn_builder, b_temp, reg_a);
 
-    encode(fn_builder, (Instruction) { mov, {reg1, a->operand }} );
-    encode(fn_builder, (Instruction) { imul, {reg1, reg1, b->operand }} );
+    reg_a = reg_value(Register_A, a->descriptor);
+    move_value(fn_builder, reg_a, a);
 
-    Value* temporary_value = stack_reserve(fn_builder, &a->descriptor);
-    encode(fn_builder, (Instruction) { mov, { temporary_value->operand, reg1 }} );
+    encode(fn_builder, (Instruction) { imul, { reg_a->operand, b_temp->operand } });
+
+    Value* temporary_value = stack_reserve(fn_builder, a->descriptor);
+    move_value(fn_builder, temporary_value, reg_a);
 
     return temporary_value;
 }
 
 Value* rns_signed_div(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    assert_not_a_register(a);
-    assert_not_a_register(b);
-
-    u32 max_size = MAX(a->operand.size, b->operand.size);
-    Operand reg1 = get_reg(max_size, Register_A);
+    redassert(typecheck_values(a, b));
+    redassert(a->descriptor->type == DescriptorType_Integer);
+    assert_not_register(a, Register_A);
+    assert_not_register(b, Register_A);
 
     // Signed division stores the remainder in the D register
     Value* rdx_temp = stack_reserve(fn_builder, &descriptor_s64);
-    encode(fn_builder, (Instruction) { mov, {rdx_temp->operand, reg.rdx }} );
+    Value* reg_rdx = reg_value(Register_D, &descriptor_s64);
+    move_value(fn_builder, rdx_temp, reg_rdx);
 
-    encode(fn_builder, (Instruction) { mov, {reg1, a->operand }} );
+    Value* reg_a = reg_value(Register_A, a->descriptor);
+    move_value(fn_builder, reg_a, a);
 
-    Operand b_operand = get_reg(b->operand.size, Register_B);
-    encode(fn_builder, (Instruction) { mov, {b_operand, b->operand }});
-    switch (descriptor_size(&a->descriptor))
+    Value* divisor = stack_reserve(fn_builder, b->descriptor);
+    move_value(fn_builder, divisor, b);
+    switch (descriptor_size(a->descriptor))
     {
         case OperandSize_16:
             encode(fn_builder, (Instruction) { cwd, {0}});
@@ -3042,13 +3237,13 @@ Value* rns_signed_div(FunctionBuilder* fn_builder, Value* a, Value* b)
             RED_NOT_IMPLEMENTED;
     }
 
-    encode(fn_builder, (Instruction) { idiv, {b_operand}});
+    encode(fn_builder, (Instruction) { idiv, {divisor->operand}});
 
-    Value* temporary_value = stack_reserve(fn_builder, &a->descriptor);
-    encode(fn_builder, (Instruction) { mov, { temporary_value->operand, reg1 }} );
+    Value* temporary_value = stack_reserve(fn_builder, a->descriptor);
+    move_value(fn_builder, temporary_value, reg_a);
 
     // Restore RDX
-    encode(fn_builder, (Instruction) { mov, {reg.rdx, rdx_temp->operand}});
+    move_value(fn_builder, reg_rdx, rdx_temp);
 
     return temporary_value;
 }
@@ -3060,47 +3255,55 @@ void test_rns_add_sub(void)
     s64 value_a = 5;
     s64 value_b = 6;
     s64 sub_value = 4;
-    FunctionBuilder fn_builder = fn_begin();
-    Value* a = s64_value(value_a);
-    Value* b = s64_value(value_b);
-    Value* sub_v = s64_value(sub_value);
-    Value* sub_result = rns_sub(&fn_builder, a, sub_v);
-    Value* add_result = rns_add(&fn_builder, sub_result, b);
-    fn_return(&fn_builder, add_result);
-    Value* fn = fn_end(&fn_builder);
-    s64 result = value_as_function(fn, RetS64_ParamS64_S64)(value_a, value_b);
+
+    Function(test_add_and_sub)
+    {
+        Arg_s64(a);
+        Arg_s64(b);
+
+        Return(rns_add(&fn_builder, rns_sub(&fn_builder, a, s64_value(sub_value)), b));
+    }
+    s64 result = value_as_function(test_add_and_sub, RetS64_ParamS64_S64)(value_a, value_b);
 
     print("Result: %ld\n", result);
     print("Expected: %ld\n", value_a - sub_value + value_b);
-}
-
-void test_multiply(void)
-{
-    s64 value_a = -5;
-    s32 value_b = 6;
-    FunctionBuilder fn_builder = fn_begin();
-    Value* a = s64_value(value_a);
-    Value* b = s32_value(value_b);
-    fn_return(&fn_builder, rns_signed_mul_immediate(&fn_builder, a, b));
-    Value* fn = fn_end(&fn_builder);
-    s64 result = value_as_function(fn, RetS64_ParamS64_S64)(value_a, value_b);
-    printf("Result: %I64d\n", result);
-    printf("Expected: %I64d\n", value_a * value_b);
+    redassert(result == (value_a - sub_value + value_b));
 }
 
 typedef s32 RetS32_ParamS32_S32(s32, s32);
+void test_multiply(void)
+{
+    s32 value_a = -5;
+    s32 value_b = 6;
+
+    Function(mult)
+    {
+        Arg_s32(a);
+        Arg_s32(b);
+        Return(rns_signed_mul_immediate(&fn_builder, a, b));
+    }
+    s32 result = value_as_function(mult, RetS32_ParamS32_S32)(value_a, value_b);
+    printf("Result: %d\n", result);
+    printf("Expected: %d\n", value_a * value_b);
+    redassert(result == (value_a * value_b))
+}
+
 void test_divide(void)
 {
     s32 value_a = 40;
     s32 value_b = 5;
-    FunctionBuilder fn_builder = fn_begin();
+    Function(divide_test)
+    {
+        Arg_s32(a);
+        Arg_s32(b);
+        Return(rns_signed_div(&fn_builder, a, b));
+    }
     Value* a = s32_value(value_a);
     Value* b = s32_value(value_b);
-    fn_return(&fn_builder, rns_signed_div(&fn_builder, a, b));
-    Value* fn = fn_end(&fn_builder);
-    s32 result = value_as_function(fn, RetS32_ParamS32_S32)(value_a, value_b);
+    s32 result = value_as_function(divide_test, RetS32_ParamS32_S32)(value_a, value_b);
     printf("Result: %d\n", result);
     printf("Expected: %d\n", value_a / value_b);
+    redassert(result == (value_a / value_b));
 }
 
 typedef void RetVoid_Param_P_S32(s32*);
@@ -3129,7 +3332,7 @@ void test_array_loop(void)
     {
         Arg(arr, &array_pointer_descriptor);
         Stack_s32(index, s32_value(0));
-        Stack(temp, &arr->descriptor, arr);
+        Stack(temp, arr->descriptor, arr);
 
         u32 array_elem_size = (u32)descriptor_size(array_pointer_descriptor.pointer_to->fixed_size_array.data);
 
@@ -3177,32 +3380,45 @@ void test_structs(void)
     Descriptor* size_struct_descriptor = struct_end(&struct_builder);
     Descriptor* size_struct_pointer_desc = descriptor_pointer_to(size_struct_descriptor);
 
-    FunctionBuilder fn_builder = fn_begin();
+    Function(struct_test)
+    {
+        Arg(arg0, size_struct_pointer_desc);
+        encode(&fn_builder, (Instruction) { mov, { reg.rax, arg0->operand } });
 
-    Value* arg0 = fn_arg(&fn_builder, size_struct_pointer_desc);
-    encode(&fn_builder, (Instruction) { mov, { reg.rax, arg0->operand } });
-    Value* height_value = NEW(Value, 1);
-    *height_value = (const Value) {
-        .descriptor = *height_field->descriptor,
-        .operand = {
-            .type = OperandType_MemoryIndirect,
-            .size = (u32)descriptor_size(height_field->descriptor),
-            .mem_indirect = {
-                .displacement = (s32)height_field->offset,
-                .reg = reg.rax.reg,
+        Value* width_value = NEW(Value, 1);
+        *width_value = (const Value){
+            .descriptor = (Descriptor*)width_field->descriptor,
+            .operand = {
+                .type = OperandType_MemoryIndirect,
+                .size = (u32)descriptor_size(width_field->descriptor),
+                .mem_indirect = {
+                    .displacement = (s32)width_field->offset,
+                    .reg = reg.rax.reg,
+                },
             },
-        },
-    };
+        };
+        Value* height_value = NEW(Value, 1);
+        *height_value = (const Value){
+            .descriptor = (Descriptor*)height_field->descriptor,
+            .operand = {
+                .type = OperandType_MemoryIndirect,
+                .size = (u32)descriptor_size(height_field->descriptor),
+                .mem_indirect = {
+                    .displacement = (s32)height_field->offset,
+                    .reg = reg.rax.reg,
+                },
+            },
+        };
 
-    fn_return(&fn_builder, height_value);
+        Return(rns_signed_mul_immediate(&fn_builder, width_value, height_value));
+    }
 
     typedef struct { s32 width; s64 height; s32 dummy; } size_struct;
     size_struct a = { .width = 10, .height = 42 };
-    Value* fn = fn_end(&fn_builder);
-    s32 height = value_as_function(fn, RetS32_Param_VoidP)(&a);
-    //redassert(height == a.height);
+    s32 height = value_as_function(struct_test, RetS32_Param_VoidP)(&a);
     s64 struct_size = descriptor_size(size_struct_descriptor);
     redassert(sizeof(a) == struct_size);
+    redassert(height == a.height);
 }
 
 void tests_()
@@ -3234,13 +3450,88 @@ void tests_()
     redassert(result == v5);
 }
 
+void test_type_checker(void)
+{
+    redassert (typecheck(&descriptor_s32, &descriptor_s32));
+    redassert(!typecheck(&descriptor_s32, &descriptor_s16));
+
+    redassert(!typecheck(&descriptor_s64, (Descriptor*){descriptor_pointer_to(&descriptor_s64) }));
+
+    redassert(!typecheck((Descriptor*) { descriptor_array_of(&descriptor_s32, 2) }, (Descriptor*) { descriptor_array_of(&descriptor_s32, 3) }));
+
+    StructBuilder struct_buildera = struct_begin();
+    struct_add_field(&struct_buildera, &descriptor_s32);
+    Descriptor* a = struct_end(&struct_buildera);
+    StructBuilder struct_builderb = struct_begin();
+    struct_add_field(&struct_builderb, &descriptor_s32);
+    Descriptor* b = struct_end(&struct_builderb);
+
+    redassert(typecheck(a, a));
+    redassert(!typecheck(a, b));
+
+    Function(fn_a)
+    {
+        Arg(arg0, &descriptor_s32);
+    }
+    Function(fn_b)
+    {
+        Arg(arg0, &descriptor_s32);
+    }
+    redassert(typecheck(fn_a->descriptor, fn_b->descriptor));
+
+    Function(fn_c)
+    {
+        Arg(arg0, &descriptor_s32);
+        Arg(arg1, &descriptor_s32);
+    }
+    Function(fn_d)
+    {
+        Arg(arg0, &descriptor_s64);
+    }
+
+    Function(fn_e)
+    {
+        Arg(arg0, &descriptor_s64);
+        Return(s32_value(0));
+    }
+
+    redassert(!typecheck(fn_a->descriptor, fn_c->descriptor));
+    redassert(!typecheck(fn_a->descriptor, fn_d->descriptor));
+    redassert(!typecheck(fn_d->descriptor, fn_c->descriptor));
+    redassert(!typecheck(fn_d->descriptor, fn_e->descriptor));
+}
+
+typedef s64 s64_s64(s64);
+void test_fibonacci(void)
+{
+    Function(fib)
+    {
+        Arg_s64(n);
+        IF(compare(&fn_builder, Cmp_Equal, n, s64_value(0)))
+        {
+            Return(s64_value(0));
+        }
+        IF(compare(&fn_builder, Cmp_Equal, n, s64_value(1)))
+        {
+            Return(s64_value(1));
+        }
+        Stack_s64(n_minus_one, rns_sub(&fn_builder, n, s64_value(1)));
+        Stack_s64(n_minus_two, rns_sub(&fn_builder, n, s64_value(2)));
+        Return(rns_add(&fn_builder, call_fn_value(&fn_builder, fib, n_minus_one, 1), call_fn_value(&fn_builder, fib, n_minus_two, 1)));
+    }
+
+    s64_s64* fib_fn = value_as_function(fib, s64_s64);
+    s64 fibr[7];
+    redassert((fibr[0] = fib_fn(0)) == 0);
+    redassert((fibr[1] = fib_fn(1)) == 1);
+    redassert((fibr[2] = fib_fn(2)) == 1);
+    redassert((fibr[3] = fib_fn(3)) == 2);
+    redassert((fibr[6] = fib_fn(6)) == 8);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-#if 1
-    tests_();
-#else
-    TEST(mov_rax_r9, INSTR(mov, { reg.rax, reg.r9 }), EXPECTED(0x4c, 0x89, 0xc8)));
-#endif
+    test_fibonacci();
 }
 
 s32 main(s32 argc, char* argv[])
