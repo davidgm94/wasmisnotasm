@@ -11,10 +11,30 @@
 #endif
 
 #ifdef RED_OS_WINDOWS
-#define MSVC_x86_64
+#define MSVC_x86_64 1
+#define SYSTEM_V_x86_64 0
 #else
 #if defined(RED_OS_LINUX)
-#define SYSTEM_V_x86_64
+#define MSVC_x86_64 0
+#define SYSTEM_V_x86_64 1
+#else
+#error
+#endif
+#endif
+
+typedef enum CallingConvention
+{
+    MSVC,
+    SYSTEMV,
+} CallingConvention;
+CallingConvention calling_convention =
+#ifdef RED_OS_WINDOWS
+MSVC;
+#else
+#ifdef RED_OS_LINUX
+SYSTEMV;
+#else
+#error
 #endif
 #endif
 
@@ -22,7 +42,6 @@ static inline s64 align(s64 number, s64 alignment)
 {
     return (s64)(ceil((double)number / alignment) * alignment);
 }
-
 
 typedef s64 square_fn(s64);
 typedef s64 mul_fn(s64, s64);
@@ -455,14 +474,20 @@ static inline Operand rel64(u64 value)
     return (const Operand)_rel(64, value);
 }
 
-#if 0
-#if defined (MSVC_x86_64)
-#elif defined (SYSTEM_V_x86_64)
-#define stack_reg reg.rbp.reg
-#endif
-#else
-#define stack_reg reg.rbp.reg
-#endif
+static inline Register get_stack_register(void)
+{
+    switch (calling_convention)
+    {
+        case MSVC:
+            return reg.rsp.reg;
+        case SYSTEMV:
+            return reg.rbp.reg;
+            break;
+        default:
+            RED_NOT_IMPLEMENTED;
+            return 0;
+    }
+}
 
 static inline Operand stack(s32 offset, s32 size)
 {
@@ -471,11 +496,35 @@ static inline Operand stack(s32 offset, s32 size)
         .type = OperandType_MemoryIndirect,
         .mem_indirect =
         {
-            .reg = stack_reg,
+            .reg = get_stack_register(),
             .displacement = offset,
         },
         .size = size,
     };
+}
+
+static inline Operand get_reg(OperandSize reg_size, Register reg_index)
+{
+    return reg.arr[register_size_jump_table[reg_size]][reg_index];
+}
+
+static inline Value* reg_value(Register reg, const Descriptor* descriptor)
+{
+    s64 size = descriptor_size(descriptor);
+    redassert(
+        size == sizeof(s8) ||
+        size == sizeof(s16) ||
+        size == sizeof(s32) ||
+        size == sizeof(s64)
+    );
+
+    Value* result = NEW(Value, 1);
+    *result = (Value){
+        .descriptor = *descriptor,
+        .operand = get_reg(size, reg),
+    };
+
+    return result;
 }
 
 static inline Value* s32_value(s32 v)
@@ -532,8 +581,7 @@ static inline Value* pointer_value(u64 address)
 }
 #endif
 
-#ifdef MSVC_x86_64
-
+#if MSVC_x86_64
 const Register parameter_registers[] =
 {
     Register_C,
@@ -571,7 +619,7 @@ const Register preserved_registers[] =
     Register_15,
 };
 
-#elif defined(SYSTEM_V_x86_64)
+#elif (SYSTEM_V_x86_64)
 
 const Register parameter_registers[] =
 {
@@ -614,10 +662,6 @@ const Register preserved_registers[] =
 };
 #endif
 
-static inline Operand get_reg(OperandSize reg_size, Register reg_index)
-{
-    return reg.arr[register_size_jump_table[reg_size]][reg_index];
-}
 
 Value* C_function_value(const char* proto, u64 address)
 {
@@ -2043,26 +2087,49 @@ bool find_encoding(Instruction instruction, u32* encoding_index, u32* combinatio
 
 static inline Mod find_mod_displacement(s32 displacement)
 {
-    if (displacement == 0)
-    {
-        return Mod_Displacement_0;
-    }
-
-    if (displacement <= INT8_MAX && displacement >= INT8_MIN)
-    {
-        return Mod_Displacement_8;
-    }
-
-    return Mod_Displacement_32;
 }
 
-void encode(ExecutionBuffer* eb, Instruction instruction)
+typedef struct LabelPatch32
+{
+    s32* address;
+    s64 ip;
+} LabelPatch32;
+
+typedef struct JumpPatchList
+{
+    LabelPatch32 patch;
+    struct JumpPatchList* next;
+} JumpPatchList;
+
+typedef struct StackPatch
+{
+    s32* location;
+    u32 size;
+} StackPatch;
+
+#define MAX_DISPLACEMENT_COUNT 128
+
+typedef struct FunctionBuilder
+{
+    DescriptorFunction descriptor;
+    ExecutionBuffer eb;
+    StackPatch stack_displacements[MAX_DISPLACEMENT_COUNT];
+    s64 stack_displacement_count;
+
+    JumpPatchList* return_patch_list;
+    s32 stack_offset;
+    u32 max_call_parameter_stack_size;
+    u8 next_arg;
+} FunctionBuilder;
+
+void encode(FunctionBuilder* fn_builder, Instruction instruction)
 {
     u32 encoding_index;
     u32 combination_index;
+
     if (!find_encoding(instruction, &encoding_index, &combination_index))
     {
-        redassert(false);
+        redassert(!"Couldn't find encoding");
         return;
     }
 
@@ -2109,7 +2176,6 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
         bool s = plus_reg_op_code & 0b1;
         plus_reg_op_code = (plus_reg_op_code & 0b11111000) | (reg_code & 0b111);
         op_code[0] = plus_reg_op_code;
-
     }
 
     // MOD RM
@@ -2119,10 +2185,13 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
     bool is_reg = encoding.options.type == Reg;
     bool need_mod_rm = is_digit || is_reg || r_m_encoding;
 
+    u64 offset_of_displacement = 0;
+    u32 stack_size = 0;
     u8 register_or_digit = 0;
     u8 r_m = 0;
     u8 mod = 0;
     u8 mod_r_m = 0;
+    bool encoding_stack_operand = false;
 
     if (need_mod_rm)
     {
@@ -2134,7 +2203,7 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                 case OperandType_Register:
                     if (operand.reg & Register_N_Flag)
                     {
-                        rex_byte |= RexB;
+                        rex_byte |= RexR;
                     }
                     switch (oi)
                     {
@@ -2158,18 +2227,17 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                     }
                     break;
                 case OperandType_MemoryIndirect:
-                    mod = find_mod_displacement(operand.mem_indirect.displacement);
+                {
+                    mod = Mod_Displacement_32;
                     r_m = operand.mem_indirect.reg;
-                    need_sib = operand.mem_indirect.reg == reg.rsp.reg;
+                    need_sib = operand.mem_indirect.reg == get_stack_register();
+
                     if (need_sib)
                     {
-                        sib_byte = (
-                            (SIBScale_1 << 6) |
-                            (r_m << 3) |
-                            (r_m)
-                            );
+                        sib_byte = (SIBScale_1 << 6) | (r_m << 3) | (r_m);
                     }
                     break;
+                }
                 default:
                     break;
             }
@@ -2182,19 +2250,19 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
 
         mod_r_m = (
             (mod << 6) |
-            (register_or_digit << 3) |
-            (r_m)
+            ((register_or_digit & 0b111) << 3) |
+            ((r_m & 0b111))
             );
 
     }
 
     if (rex_byte)
     {
-        u8_append(eb, rex_byte);
+        u8_append(&fn_builder->eb, rex_byte);
     }
     else if ((instruction.operands[0].type == OperandType_Register && instruction.operands[0].size == OperandSize_16) || (instruction.operands[1].type == OperandType_Register && instruction.operands[1].size == OperandSize_16) || encoding.options.explicit_byte_size == OperandSize_16)
     {
-        u8_append(eb, OperandSizeOverride);
+        u8_append(&fn_builder->eb, OperandSizeOverride);
     }
 
     for (u32 i = 0; i < array_length(op_code); i++)
@@ -2202,18 +2270,18 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
         u8 op_code_byte = op_code[i];
         if (op_code_byte)
         {
-            u8_append(eb, op_code_byte);
+            u8_append(&fn_builder->eb, op_code_byte);
         }
     }
 
     if (need_mod_rm)
     {
-        u8_append(eb, mod_r_m);
+        u8_append(&fn_builder->eb, mod_r_m);
     }
     // SIB
     if (need_sib)
     {
-        u8_append(eb, sib_byte);
+        u8_append(&fn_builder->eb, sib_byte);
     }
 
     // DISPLACEMENT
@@ -2227,10 +2295,22 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
                 switch (mod)
                 {
                     case Mod_Displacement_8:
-                        s8_append(eb, (s8)op.mem_indirect.displacement);
+                        s8_append(&fn_builder->eb, (s8)op.mem_indirect.displacement);
                         break;
                     case Mod_Displacement_32:
-                        s32_append(eb, op.mem_indirect.displacement);
+                        if (need_sib)
+                        {
+                            offset_of_displacement = fn_builder->eb.len;
+                            stack_size = op.size;
+                            redassert(fn_builder->stack_displacement_count < MAX_DISPLACEMENT_COUNT);
+                            s32* location = (s32*)(fn_builder->eb.ptr + offset_of_displacement);
+                            fn_builder->stack_displacements[fn_builder->stack_displacement_count] = (const StackPatch){
+                                .location = location,
+                                .size = stack_size,
+                            };
+                            fn_builder->stack_displacement_count++;
+                        }
+                        s32_append(&fn_builder->eb, op.mem_indirect.displacement);
                         break;
                     default:
                         break;
@@ -2248,16 +2328,16 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
             switch (operand.size)
             {
                 case OperandSize_8:
-                    u8_append(eb, operand.imm._8);
+                    u8_append(&fn_builder->eb, operand.imm._8);
                     break;
                 case OperandSize_16:
-                    u16_append(eb, operand.imm._16);
+                    u16_append(&fn_builder->eb, operand.imm._16);
                     break;
                 case OperandSize_32:
-                    u32_append(eb, operand.imm._32);
+                    u32_append(&fn_builder->eb, operand.imm._32);
                     break;
                 case OperandSize_64:
-                    u64_append(eb, operand.imm._64);
+                    u64_append(&fn_builder->eb, operand.imm._64);
                     break;
                 default:
                     RED_NOT_IMPLEMENTED;
@@ -2269,16 +2349,16 @@ void encode(ExecutionBuffer* eb, Instruction instruction)
             switch (operand.size)
             {
                 case OperandSize_8:
-                    u8_append(eb, operand.rel._8);
+                    u8_append(&fn_builder->eb, operand.rel._8);
                     break;
                 case OperandSize_16:
-                    u16_append(eb, operand.rel._16);
+                    u16_append(&fn_builder->eb, operand.rel._16);
                     break;
                 case OperandSize_32:
-                    u32_append(eb, operand.rel._32);
+                    u32_append(&fn_builder->eb, operand.rel._32);
                     break;
                 case OperandSize_64:
-                    u64_append(eb, operand.rel._64);
+                    u64_append(&fn_builder->eb, operand.rel._64);
                     break;
                 default:
                     RED_NOT_IMPLEMENTED;
@@ -2308,8 +2388,8 @@ Value* _id_ = fn_arg(&fn_builder, (_descriptor_))
 #define Arg_u64(_id_) Arg(_id_, &descriptor_u64)
 
 #define Stack(_id_, _descriptor_, _value_)\
-Value* _id_ = reserve_stack(&fn_builder, (_descriptor_));\
-assign(&fn_builder, (_id_)->operand, (_value_)->operand)
+Value* _id_ = stack_reserve(&fn_builder, (_descriptor_));\
+move_value(&fn_builder, (_id_), (_value_))
 
 #define Stack_s8(_id_ , _value_) Stack((_id_), &descriptor_s8 , (_value_))
 #define Stack_s16(_id_, _value_) Stack((_id_), &descriptor_s16, (_value_))
@@ -2326,20 +2406,22 @@ assign(&fn_builder, (_id_)->operand, (_value_)->operand)
 #define DivS(_a_, _b_) rns_signed_div(&fn_builder, _a_, _b_)
 
 
+#define TEST_MODE 0
 #define INSTR(...) (Instruction) { __VA_ARGS__ }
 #define EXPECTED(...) __VA_ARGS__
 static bool test_instruction(const char* test_name, Instruction instruction, u8* expected_bytes, u8 expected_byte_count)
 {
     const u32 buffer_size = 64;
-    ExecutionBuffer eb = give_me(buffer_size);
-    encode(&eb, instruction);
+    FunctionBuilder fn_builder = { 0 };
+    fn_builder.eb = give_me(buffer_size);
+    encode(&fn_builder, instruction);
 
     ExecutionBuffer expected = give_me(buffer_size);
     for (u32 i = 0; i < expected_byte_count; i++)
     {
         u8_append(&expected, expected_bytes[i]);
     }
-    return test_buffer(&eb, expected.ptr, expected.len, test_name);
+    return test_buffer(&fn_builder.eb, expected.ptr, expected.len, test_name);
 }
 
 #define TEST(test_name, _instr, _test_bytes)\
@@ -2378,33 +2460,24 @@ void test_main(s32 argc, char* argv[])
     TEST(push_r9, INSTR(push, { reg.r9 }), EXPECTED(0x41, 0x51)));
 }
 
-typedef struct LabelPatch32
+Value* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
 {
-    s32* address;
-    s64 ip;
-} LabelPatch32;
-
-typedef struct JumpPatchList
-{
-    LabelPatch32 patch;
-    struct JumpPatchList* next;
-} JumpPatchList;
-
-typedef struct FunctionBuilder
-{
-    DescriptorFunction descriptor;
-    ExecutionBuffer eb;
-    JumpPatchList* return_patch_list;
-    s32 stack_offset;
-    u8 next_arg;
-} FunctionBuilder;
-
-Value* reserve_stack(FunctionBuilder* fn_builder, const Descriptor* descriptor)
-{
-    // @TODO: for MSVC, we should align-patch the stack
     s32 size = (s32)descriptor_size(descriptor);
-    fn_builder->stack_offset -= size;
-    Operand reserved = stack(fn_builder->stack_offset, size);
+    Operand reserved;
+
+    switch (calling_convention)
+    {
+        // @TODO: we need to test this in SystemV
+        case SYSTEMV:
+        case MSVC:
+            fn_builder->stack_offset += size;
+            reserved = stack(-fn_builder->stack_offset, size);
+            break;
+        default:
+            RED_NOT_IMPLEMENTED;
+            break;
+    }
+
     Value* result = NEW(Value, 1);
     *result = (const Value) {
         .descriptor = *descriptor,
@@ -2414,23 +2487,23 @@ Value* reserve_stack(FunctionBuilder* fn_builder, const Descriptor* descriptor)
     return result;
 }
 
-void assign(FunctionBuilder* fn_builder, Operand a, Operand b)
+void move_value(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    encode(&fn_builder->eb, (Instruction) { mov, {a, b} });
+    encode(fn_builder, (Instruction) { mov, {a->operand, b->operand} });
 }
 
 LabelPatch32 make_jnz(FunctionBuilder* fn_builder)
 {
-    encode(&fn_builder->eb, (Instruction) { jnz, { rel32(0xcccccccc) } });
+    encode(fn_builder, (Instruction) { jnz, { rel32(0xcccccccc) } });
     s64 ip = fn_builder->eb.len;
-    s32* patch = (s32*)&fn_builder->eb.ptr[ip - sizeof(u32)];
+    s32* patch = (s32*)fn_builder->eb.ptr[ip - sizeof(u32)];
 
     return (LabelPatch32) { patch, ip };
 }
 
 LabelPatch32 make_jz(FunctionBuilder* fn_builder)
 {
-    encode(&fn_builder->eb, (Instruction) { jz, { rel32(0xcccccccc) } });
+    encode(fn_builder, (Instruction) { jz, { rel32(0xcccccccc) } });
     s64 ip = fn_builder->eb.len;
     s32* patch = (s32*)&fn_builder->eb.ptr[ip - sizeof(u32)];
 
@@ -2439,7 +2512,7 @@ LabelPatch32 make_jz(FunctionBuilder* fn_builder)
 
 LabelPatch32 make_jmp(FunctionBuilder* fn_builder)
 {
-    encode(&fn_builder->eb, (Instruction) { jmp, { rel32(0xcccccccc) } });
+    encode(fn_builder, (Instruction) { jmp, { rel32(0xcccccccc) } });
     s64 ip = fn_builder->eb.len;
     s32* patch = (s32*)&fn_builder->eb.ptr[ip - sizeof(u32)];
 
@@ -2481,62 +2554,138 @@ FunctionBuilder fn_begin(void)
         .eb = give_me(1024)
     };
 
-    fn_builder.descriptor.arg_list = NEW(Value, array_length(parameter_registers));
+    // @Volatile @ArgCount
+    fn_builder.descriptor.arg_list = NEW(Value, 16);
     fn_builder.descriptor.return_value = NEW(Value, 1);
-    encode(&fn_builder.eb, (Instruction) { push, { reg.rbp } });
-    encode(&fn_builder.eb, (Instruction) { mov, { reg.rbp, reg.rsp } });
+
+    switch (calling_convention)
+    {
+        case MSVC:
+            encode(&fn_builder, (Instruction) { sub, { reg.rsp, imm32(0xcccccccc)} });
+            break;
+        case SYSTEMV:
+            encode(&fn_builder, (Instruction) { push, { reg.rbp } });
+            encode(&fn_builder, (Instruction) { mov, { reg.rbp, reg.rsp } });
+            break;
+        default:
+            RED_NOT_IMPLEMENTED;
+            break;
+    }
 
     return fn_builder;
 }
 
 Value* fn_end(FunctionBuilder* fn_builder)
 {
-    resolve_jump_patch_list(fn_builder, fn_builder->return_patch_list);
+    switch (calling_convention)
+    {
+        case MSVC:
+        {
+            s8 alignment = 0x8;
+            fn_builder->stack_offset += fn_builder->max_call_parameter_stack_size;
+            s32 stack_size = (s32)align(fn_builder->stack_offset, 16) + alignment;
+            s64 current_function_code_size = fn_builder->eb.len;
+            fn_builder->eb.len = 0;
 
-    encode(&fn_builder->eb, (Instruction) { pop, { reg.rbp } });
-    encode(&fn_builder->eb, (Instruction) { ret });
+            encode(fn_builder, (Instruction) { sub, { reg.rsp, imm32(stack_size) } });
+            fn_builder->eb.len = current_function_code_size;
+
+            for (s64 i = 0; i < fn_builder->stack_displacement_count; i++)
+            {
+                StackPatch* patch = &fn_builder->stack_displacements[i];
+                s32 displacement = *patch->location;
+                if (displacement < 0)
+                {
+                    *patch->location = stack_size + displacement;
+                }
+                else if (displacement >= (s32)fn_builder->max_call_parameter_stack_size)
+                {
+                    s8 return_address_size = 8;
+                    *patch->location = stack_size + displacement + return_address_size;
+                }
+            }
+
+            resolve_jump_patch_list(fn_builder, fn_builder->return_patch_list);
+
+            encode(fn_builder, (Instruction) { add, { reg.rsp, imm32(stack_size) } });
+            encode(fn_builder, (Instruction) { ret });
+            break;
+        }
+        case SYSTEMV:
+            // @TODO: maybe resolve max call parameter stack size
+            resolve_jump_patch_list(fn_builder, fn_builder->return_patch_list);
+            encode(fn_builder, (Instruction) { pop, { reg.rbp } });
+            encode(fn_builder, (Instruction) { ret });
+            break;
+        default:
+            RED_NOT_IMPLEMENTED;
+            break;
+    }
 
     fn_builder->descriptor.arg_count = fn_builder->next_arg;
     Value* result = NEW(Value, 1);
-    *result = 
-    (const Value)
+    *result = (const Value)
     {
-        .descriptor = {.type = DescriptorType_Function, .function = fn_builder->descriptor},
+        .descriptor = {
+            .type = DescriptorType_Function,
+            .function = fn_builder->descriptor,
+        },
         .operand = imm64((u64)fn_builder->eb.ptr),
     };
+
     return result;
 }
 
 Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
 {
-    redassert(fn_builder->next_arg < array_length(parameter_registers));
-    u32 register_index = parameter_registers[fn_builder->next_arg];
-
-    Value* arg = NEW(Value, 1);
-    *arg = (const Value)
+    s64 arg_index = fn_builder->next_arg++;
+    if (arg_index < array_length(parameter_registers))
     {
-        .descriptor = *arg_descriptor,
-        .operand = get_reg(descriptor_size(arg_descriptor), register_index),
-    };
+        u32 register_index = parameter_registers[arg_index];
+        fn_builder->descriptor.arg_list[arg_index] = *reg_value(register_index, arg_descriptor);
+    }
+    else
+    {
+        switch (calling_convention)
+        {
+            case MSVC:
+            {
+                s32 return_address_size = 8;
+                s64 arg_size = descriptor_size(arg_descriptor);
+                s64 offset = arg_index * 8;
 
-    fn_builder->next_arg++;
-    return arg;
+                fn_builder->descriptor.arg_list[arg_index] = (const Value){
+                    .descriptor = *arg_descriptor,
+                    .operand = stack((s32)offset, (s32)arg_size),
+                };
+                break;
+            }
+            default:
+                RED_NOT_IMPLEMENTED;
+                break;
+        }
+    }
+
+    return &fn_builder->descriptor.arg_list[arg_index];
 };
 
 Value* fn_return(FunctionBuilder* fn_builder, const Value* to_return)
 {
-    *fn_builder->descriptor.return_value = *to_return;
-
     if (to_return->descriptor.type != DescriptorType_Void)
     {
         s64 size = descriptor_size(&to_return->descriptor);
         redassert(size <= OperandSize_64);
-        Operand ret_reg = get_reg(size, return_registers[0]);
+        Value* ret_reg = reg_value(return_registers[0], &to_return->descriptor);
 
-        if (memcmp(&ret_reg, &to_return->operand, sizeof(to_return)) != 0)
+        if (memcmp(&ret_reg->operand, &to_return->operand, sizeof(Operand)) != 0)
         {
-            encode(&fn_builder->eb, (Instruction) { mov, { ret_reg, to_return->operand }});
+            encode(fn_builder, (Instruction) { mov, { ret_reg->operand, to_return->operand }});
         }
+        *fn_builder->descriptor.return_value = *ret_reg;
+    }
+    else
+    {
+        *fn_builder->descriptor.return_value = *void_value;
     }
 
     fn_builder->return_patch_list = make_jump_patch(fn_builder, fn_builder->return_patch_list);
@@ -2554,21 +2703,24 @@ u64 helper_value_as_function(Value* value)
 
 #define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
 
-Value* fn_call(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
+Value* call_fn_value(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
 {
+    DescriptorFunction* descriptor = &fn->descriptor.function;
     redassert(fn->descriptor.type == DescriptorType_Function);
-    redassert(fn->descriptor.function.arg_list);
-    redassert(fn->descriptor.function.arg_count == arg_count);
+    redassert(descriptor->arg_count == arg_count);
     // @TODO: type-check arguments
+
     for (s64 i = 0; i < arg_count; i++)
     {
-        Value arg = arg_list[i];
-        Operand param_reg = get_reg(descriptor_size(&arg.descriptor), parameter_registers[i]);
-        encode(&fn_builder->eb, (Instruction) {mov, {param_reg, arg_list[i].operand }});
+        redassert(descriptor->arg_list[i].descriptor.type == arg_list[i].descriptor.type);
+        encode(fn_builder, (Instruction) {mov, {descriptor->arg_list[i].operand, arg_list[i].operand }});
     }
 
-    encode(&fn_builder->eb, (Instruction) {mov, {reg.rax, fn->operand }});
-    encode(&fn_builder->eb, (Instruction) {call, {reg.rax}});
+    u32 parameter_stack_size = (u32)MAX(4, arg_count) * 8;
+    fn_builder->max_call_parameter_stack_size = MAX(fn_builder->max_call_parameter_stack_size, parameter_stack_size);
+
+    encode(fn_builder, (Instruction) {mov, {reg.rax, fn->operand }});
+    encode(fn_builder, (Instruction) {call, {reg.rax}});
 
     return fn->descriptor.function.return_value;
 }
@@ -2595,7 +2747,7 @@ LabelPatch32 make_if(FunctionBuilder* fn_builder, Value* conditional)
             imm = (const Operand){0};
             break;
     }
-    encode(&fn_builder->eb, (Instruction) { cmp, { conditional->operand, imm8(0)}});
+    encode(fn_builder, (Instruction) { cmp, { conditional->operand, imm8(0)}});
 
     return make_jz(fn_builder);
 }
@@ -2696,27 +2848,27 @@ typedef enum CompareOp
 
 Value* compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value* a, Value* b)
 {
-    encode(&fn_builder->eb, (Instruction) { cmp, { a->operand, b->operand } });
-    encode(&fn_builder->eb, (Instruction) { mov, { reg.rax, imm64(0) }});
+    encode(fn_builder, (Instruction) { cmp, { a->operand, b->operand } });
+    encode(fn_builder, (Instruction) { mov, { reg.rax, imm64(0) }});
 
     switch (compare_op)
     {
         case Cmp_Equal:
-            encode(&fn_builder->eb, (Instruction) { setz, { reg.al }});
+            encode(fn_builder, (Instruction) { setz, { reg.al }});
             break;
         case Cmp_Less:
-            encode(&fn_builder->eb, (Instruction) { setl, { reg.al }});
+            encode(fn_builder, (Instruction) { setl, { reg.al }});
             break;
         case Cmp_Greater:
-            encode(&fn_builder->eb, (Instruction) { setg, { reg.al } });
+            encode(fn_builder, (Instruction) { setg, { reg.al } });
             break;
         default:
             RED_NOT_IMPLEMENTED;
             break;
     }
 
-    Value* result = reserve_stack(fn_builder, (Descriptor*)&descriptor_s64);
-    encode(&fn_builder->eb, (Instruction) { mov, { result->operand, reg.rax }});
+    Value* result = stack_reserve(fn_builder, (Descriptor*)&descriptor_s64);
+    encode(fn_builder, (Instruction) { mov, { result->operand, reg.rax }});
 
     return result;
 }
@@ -2758,7 +2910,7 @@ Value* make_partial_application_s64(Value* original_fn, s64 arg)
     FunctionBuilder fn_builder = fn_begin();
     Value* applied_arg0 = s64_value(arg);
 
-    Value* result = fn_call(&fn_builder, original_fn, applied_arg0, 1);
+    Value* result = call_fn_value(&fn_builder, original_fn, applied_arg0, 1);
     fn_return(&fn_builder, result);
 
     return fn_end(&fn_builder);
@@ -2795,7 +2947,7 @@ void print_fn(void)
     FunctionBuilder fn_builder = fn_begin();
     Value* message_value = pointer_value((u64)message);
 
-    fn_call(&fn_builder, puts_value, message_value, 1);
+    call_fn_value(&fn_builder, puts_value, message_value, 1);
 
     fn_return(&fn_builder, void_value);
     Value* fn_value = fn_end(&fn_builder);
@@ -2821,12 +2973,12 @@ Value* rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic mnemonic, Value* a, 
     Operand reg1 = get_reg(max_size, Register_A);
     Operand reg2 = get_reg(max_size, Register_B);
 
-    encode(&fn_builder->eb, (Instruction) { mov, {reg1, a->operand }} );
-    encode(&fn_builder->eb, (Instruction) { mov, {reg2, b->operand }} );
-    encode(&fn_builder->eb, (Instruction) { mnemonic, {reg1, reg2 }} );
+    encode(fn_builder, (Instruction) { mov, {reg1, a->operand }} );
+    encode(fn_builder, (Instruction) { mov, {reg2, b->operand }} );
+    encode(fn_builder, (Instruction) { mnemonic, {reg1, reg2 }} );
 
-    Value* temporary_value = reserve_stack(fn_builder, &a->descriptor);
-    encode(&fn_builder->eb, (Instruction) { mov, { temporary_value->operand, reg1 }} );
+    Value* temporary_value = stack_reserve(fn_builder, &a->descriptor);
+    encode(fn_builder, (Instruction) { mov, { temporary_value->operand, reg1 }} );
 
     return temporary_value;
 }
@@ -2850,11 +3002,11 @@ Value* rns_signed_mul_immediate(FunctionBuilder* fn_builder, Value* a, Value* b)
     u32 max_size = MAX(a->operand.size, b->operand.size);
     Operand reg1 = get_reg(max_size, Register_A);
 
-    encode(&fn_builder->eb, (Instruction) { mov, {reg1, a->operand }} );
-    encode(&fn_builder->eb, (Instruction) { imul, {reg1, reg1, b->operand }} );
+    encode(fn_builder, (Instruction) { mov, {reg1, a->operand }} );
+    encode(fn_builder, (Instruction) { imul, {reg1, reg1, b->operand }} );
 
-    Value* temporary_value = reserve_stack(fn_builder, &a->descriptor);
-    encode(&fn_builder->eb, (Instruction) { mov, { temporary_value->operand, reg1 }} );
+    Value* temporary_value = stack_reserve(fn_builder, &a->descriptor);
+    encode(fn_builder, (Instruction) { mov, { temporary_value->operand, reg1 }} );
 
     return temporary_value;
 }
@@ -2868,35 +3020,35 @@ Value* rns_signed_div(FunctionBuilder* fn_builder, Value* a, Value* b)
     Operand reg1 = get_reg(max_size, Register_A);
 
     // Signed division stores the remainder in the D register
-    Value* rdx_temp = reserve_stack(fn_builder, &descriptor_s64);
-    encode(&fn_builder->eb, (Instruction) { mov, {rdx_temp->operand, reg.rdx }} );
+    Value* rdx_temp = stack_reserve(fn_builder, &descriptor_s64);
+    encode(fn_builder, (Instruction) { mov, {rdx_temp->operand, reg.rdx }} );
 
-    encode(&fn_builder->eb, (Instruction) { mov, {reg1, a->operand }} );
+    encode(fn_builder, (Instruction) { mov, {reg1, a->operand }} );
 
     Operand b_operand = get_reg(b->operand.size, Register_B);
-    encode(&fn_builder->eb, (Instruction) { mov, {b_operand, b->operand }});
+    encode(fn_builder, (Instruction) { mov, {b_operand, b->operand }});
     switch (descriptor_size(&a->descriptor))
     {
         case OperandSize_16:
-            encode(&fn_builder->eb, (Instruction) { cwd, {0}});
+            encode(fn_builder, (Instruction) { cwd, {0}});
             break;
         case OperandSize_32:
-            encode(&fn_builder->eb, (Instruction) { cdq, {0}});
+            encode(fn_builder, (Instruction) { cdq, {0}});
             break;
         case OperandSize_64:
-            encode(&fn_builder->eb, (Instruction) { cqo, {0}});
+            encode(fn_builder, (Instruction) { cqo, {0}});
             break;
         default:
             RED_NOT_IMPLEMENTED;
     }
 
-    encode(&fn_builder->eb, (Instruction) { idiv, {b_operand}});
+    encode(fn_builder, (Instruction) { idiv, {b_operand}});
 
-    Value* temporary_value = reserve_stack(fn_builder, &a->descriptor);
-    encode(&fn_builder->eb, (Instruction) { mov, { temporary_value->operand, reg1 }} );
+    Value* temporary_value = stack_reserve(fn_builder, &a->descriptor);
+    encode(fn_builder, (Instruction) { mov, { temporary_value->operand, reg1 }} );
 
     // Restore RDX
-    encode(&fn_builder->eb, (Instruction) { mov, {reg.rdx, rdx_temp->operand}});
+    encode(fn_builder, (Instruction) { mov, {reg.rdx, rdx_temp->operand}});
 
     return temporary_value;
 }
@@ -2989,7 +3141,8 @@ void test_array_loop(void)
                 BREAK;
             }
 
-            encode(&fn_builder.eb, (Instruction) { mov, { reg.rax, temp->operand } });
+            encode(&fn_builder, (Instruction) { mov, { reg.rax, temp->operand } });
+
             Operand pointer =
             {
                 .type = OperandType_MemoryIndirect,
@@ -2999,11 +3152,10 @@ void test_array_loop(void)
                     .displacement = 0,
                 },
             };
-            encode(&fn_builder.eb, (Instruction) { inc, { pointer } });
 
-            encode(&fn_builder.eb, (Instruction) { add, { temp->operand, imm32((u32)array_elem_size) } });
-
-            encode(&fn_builder.eb, (Instruction) { inc, { index->operand } });
+            encode(&fn_builder, (Instruction) { inc, { pointer } });
+            encode(&fn_builder, (Instruction) { add, { temp->operand, imm32((u32)array_elem_size) } });
+            encode(&fn_builder, (Instruction) { inc, { index->operand } });
         }
     }
     value_as_function(array_increment, RetVoid_Param_P_S32)(arr);
@@ -3028,15 +3180,15 @@ void test_structs(void)
     FunctionBuilder fn_builder = fn_begin();
 
     Value* arg0 = fn_arg(&fn_builder, size_struct_pointer_desc);
-    encode(&fn_builder.eb, (Instruction) { mov, { reg.rax, arg0->operand } });
+    encode(&fn_builder, (Instruction) { mov, { reg.rax, arg0->operand } });
     Value* height_value = NEW(Value, 1);
     *height_value = (const Value) {
         .descriptor = *height_field->descriptor,
         .operand = {
             .type = OperandType_MemoryIndirect,
-            .size = descriptor_size(height_field->descriptor),
+            .size = (u32)descriptor_size(height_field->descriptor),
             .mem_indirect = {
-                .displacement = height_field->offset,
+                .displacement = (s32)height_field->offset,
                 .reg = reg.rax.reg,
             },
         },
@@ -3053,14 +3205,46 @@ void test_structs(void)
     redassert(sizeof(a) == struct_size);
 }
 
+void tests_()
+{
+    Function(test_args)
+    {
+        Arg_s64(arg0);
+        Arg_s64(arg1);
+        Arg_s64(arg2);
+        Arg_s64(arg3);
+        Arg_s64(arg4);
+        Arg_s64(arg5);
+        Arg_s64(arg6);
+        Arg_s64(arg7);
+        Return(arg5);
+    }
+#define def_num(a) s64 v ## a = a
+    def_num(0);
+    def_num(1);
+    def_num(2);
+    def_num(3);
+    def_num(4);
+    def_num(5);
+    def_num(6);
+    def_num(7);
+#undef def_num
+    typedef s64 foo(s64, s64, s64, s64, s64, s64, s64, s64);
+    s64 result = value_as_function(test_args, foo)(v0, v1, v2, v3, v4, v5, v6, v7);
+    redassert(result == v5);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    test_structs();
+#if 1
+    tests_();
+#else
+    TEST(mov_rax_r9, INSTR(mov, { reg.rax, reg.r9 }), EXPECTED(0x4c, 0x89, 0xc8)));
+#endif
 }
 
 s32 main(s32 argc, char* argv[])
 {
-#define TEST_MODE 0
 #if TEST_MODE
     test_main(argc, argv);
 #else
