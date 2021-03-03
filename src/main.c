@@ -209,6 +209,7 @@ typedef enum DescriptorType
     DescriptorType_Pointer,
     DescriptorType_FixedSizeArray,
     DescriptorType_Function,
+    DescriptorType_FunctionOverloadSet,
     DescriptorType_Struct,
 } DescriptorType;
 
@@ -218,7 +219,13 @@ typedef struct DescriptorFunction
     Value* arg_list;
     s64 arg_count;
     Value* return_value;
+    bool frozen;
 } DescriptorFunction;
+typedef struct DescriptorFunctionOverloadSet
+{
+    struct Value** list;
+    s64 count;
+} DescriptorFunctionOverloadSet;
 
 typedef struct DescriptorFixedSizeArray
 {
@@ -250,6 +257,7 @@ typedef struct Descriptor
     {
         DescriptorInteger integer;
         DescriptorFunction function;
+        DescriptorFunctionOverloadSet overload_set;
         const struct Descriptor* pointer_to;
         DescriptorFixedSizeArray fixed_size_array;
         DescriptorStruct struct_;
@@ -2209,7 +2217,6 @@ typedef struct FunctionBuilder
     s32 stack_offset;
     u32 max_call_parameter_stack_size;
     u8 next_arg;
-    bool done;
 } FunctionBuilder;
 
 bool typecheck(const Descriptor* a, const Descriptor* b)
@@ -2504,7 +2511,7 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
 
 #define Function(_name_)\
 Value* _name_ = NULL;\
-for (FunctionBuilder fn_builder = fn_begin(&_name_); !(fn_builder.done); fn_end(&fn_builder))
+for (FunctionBuilder fn_builder = fn_begin(&_name_); !(fn_is_frozen(&fn_builder)); fn_end(&fn_builder))
 
 #define Return(_value_)\
 fn_return(&fn_builder, _value_)
@@ -2621,7 +2628,7 @@ Value* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
     return result;
 }
 
-void move_value(FunctionBuilder* fn_builder, Value* a, Value* b)
+void move_value(FunctionBuilder* fn_builder, const Value* a, const Value* b)
 {
     s64 a_size = descriptor_size(a->descriptor);
     s64 b_size = descriptor_size(b->descriptor);
@@ -2723,7 +2730,6 @@ FunctionBuilder fn_begin(Value** result)
     };
     // @Volatile @ArgCount
     fn_builder.descriptor.arg_list = NEW(Value, 16);
-    fn_builder.descriptor.return_value = NEW(Value, 1);
 
     switch (calling_convention)
     {
@@ -2748,6 +2754,29 @@ Descriptor* fn_update_result(FunctionBuilder* fn_builder)
     Descriptor* descriptor = (*fn_builder->result)->descriptor;
     descriptor->function = fn_builder->descriptor;
     return descriptor;
+}
+
+void fn_ensure_frozen(DescriptorFunction* function)
+{
+    if (function->frozen)
+    {
+        return;
+    }
+    if (!function->return_value)
+    {
+        function->return_value = void_value;
+    }
+    function->frozen = true;
+}
+
+void fn_freeze(FunctionBuilder* fn_builder)
+{
+    fn_ensure_frozen(&(*fn_builder->result)->descriptor->function);
+}
+
+bool fn_is_frozen(FunctionBuilder* fn_builder)
+{
+    return (*fn_builder->result)->descriptor->function.frozen;
 }
 
 void fn_end(FunctionBuilder* fn_builder)
@@ -2797,18 +2826,12 @@ void fn_end(FunctionBuilder* fn_builder)
             break;
     }
 
-    Descriptor* descriptor = fn_update_result(fn_builder);
-
-    if (!descriptor->function.return_value->descriptor)
-    {
-        descriptor->function.return_value->descriptor = &descriptor_void;
-    }
-
-    fn_builder->done = true;
+    fn_freeze(fn_builder);
 }
 
 Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
 {
+    redassert(!fn_is_frozen(fn_builder));
     s64 arg_index = fn_builder->next_arg++;
     if (arg_index < array_length(parameter_registers))
     {
@@ -2844,24 +2867,31 @@ Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
 
 Value* fn_return(FunctionBuilder* fn_builder, const Value* to_return)
 {
-    if (to_return->descriptor->type != DescriptorType_Void)
+    if (fn_builder->descriptor.return_value)
     {
-        s64 size = descriptor_size(to_return->descriptor);
-        redassert(size <= OperandSize_64);
-        Value* ret_reg = reg_value(return_registers[0], to_return->descriptor);
-
-        if (memcmp(&ret_reg->operand, &to_return->operand, sizeof(Operand)) != 0)
-        {
-            encode(fn_builder, (Instruction) { mov, { ret_reg->operand, to_return->operand }});
-        }
-        *fn_builder->descriptor.return_value = *ret_reg;
+        redassert(typecheck(fn_builder->descriptor.return_value->descriptor, to_return->descriptor));
     }
     else
     {
-        *fn_builder->descriptor.return_value = *void_value;
+        redassert(!fn_is_frozen(fn_builder));
+
+        if (to_return->descriptor->type != DescriptorType_Void)
+        {
+            fn_builder->descriptor.return_value = reg_value(Register_A, to_return->descriptor);
+        }
+        else
+        {
+            fn_builder->descriptor.return_value = void_value;
+        }
+    }
+
+    if (to_return->descriptor->type != DescriptorType_Void)
+    {
+        move_value(fn_builder, fn_builder->descriptor.return_value, to_return);
     }
 
     fn_builder->return_patch_list = make_jump_patch(fn_builder, fn_builder->return_patch_list);
+    (void)fn_update_result(fn_builder);
 
     return (Value*)to_return;
 }
@@ -2875,17 +2905,49 @@ u64 helper_value_as_function(Value* value)
 }
 
 #define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
+Value* call_fn_value(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count);
+
+Value* call_fn_overload_set(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
+{
+    redassert(fn->descriptor->type == DescriptorType_FunctionOverloadSet);
+    DescriptorFunctionOverloadSet overload_set = fn->descriptor->overload_set;
+    for (s64 overload_index = 0; overload_index < overload_set.count; overload_index++)
+    {
+        bool match = true;
+        Value* overload = overload_set.list[overload_index];
+        DescriptorFunction* descriptor = &overload->descriptor->function;
+        for (s64 arg_index = 0; arg_index < arg_count; arg_index++)
+        {
+            if (!typecheck_values(&descriptor->arg_list[arg_index], &arg_list[arg_index]))
+            {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+        {
+            return call_fn_value(fn_builder, overload, arg_list, arg_count);
+        }
+    }
+    redassert(!"No matching overload found");
+    return NULL;
+}
 
 Value* call_fn_value(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
 {
     DescriptorFunction* descriptor = &fn->descriptor->function;
+    if (fn->descriptor->type == DescriptorType_FunctionOverloadSet)
+    {
+        return call_fn_overload_set(fn_builder, fn, arg_list, arg_count);
+    }
     redassert(fn->descriptor->type == DescriptorType_Function);
     redassert(descriptor->arg_count == arg_count);
-    // @TODO: type-check arguments
+
+    fn_ensure_frozen(descriptor);
 
     for (s64 i = 0; i < arg_count; i++)
     {
-        redassert(descriptor->arg_list[i].descriptor->type == arg_list[i].descriptor->type);
+        redassert(typecheck(descriptor->arg_list[i].descriptor, arg_list[i].descriptor));
         move_value(fn_builder, &descriptor->arg_list[i], &arg_list[i]);
     }
 
@@ -3529,9 +3591,87 @@ void test_fibonacci(void)
     redassert((fibr[6] = fib_fn(6)) == 8);
 }
 
+Value* make_identity(const Descriptor* type)
+{
+    Function(id)
+    {
+        Arg(arg0, type);
+        Return(arg0);
+    }
+
+    return id;
+}
+
+Value* make_add_two(const Descriptor* type)
+{
+    Function(add_two)
+    {
+        Arg(arg0, type);
+        Return(rns_add(&fn_builder, arg0, s64_value(2)));
+    }
+
+    return add_two;
+}
+
+void test_basic_parametric_polymorphism(void)
+{
+    Value* id_s64 = make_identity(&descriptor_s64);
+    Value* id_s32 = make_identity(&descriptor_s32);
+    Value* add_two_s64 = make_add_two(&descriptor_s64);
+    Function(check)
+    {
+        Value* value_s64 = s64_value(0);
+        Value* value_s32 = s32_value(0);
+        call_fn_value(&fn_builder, id_s64, value_s64, 1);
+        call_fn_value(&fn_builder, id_s32, value_s32, 1);
+        call_fn_value(&fn_builder, add_two_s64, value_s64, 1);
+    }
+}
+
+void test_basic_adhoc_polymorphism(void)
+{
+    Function(sizeof_s32)
+    {
+        Arg_s32(x);
+        (void)x;
+        Return(s64_value(sizeof(s32)));
+    }
+    Function(sizeof_s64)
+    {
+        Arg_s64(x);
+        (void)x;
+        Return(s64_value(sizeof(s64)));
+    }
+
+    Value* overload_array[] = { sizeof_s32, sizeof_s64 };
+    Descriptor overload_descriptor = {
+        .type = DescriptorType_FunctionOverloadSet,
+        .overload_set = {
+            .count = array_length(overload_array),
+            .list = overload_array,
+        },
+    };
+    Value overload = {
+        .descriptor = &overload_descriptor,
+        .operand = {0},
+    };
+
+    Function(check)
+    {
+        Value* a = call_fn_value(&fn_builder, &overload, s64_value(0), 1);
+        Value* b = call_fn_value(&fn_builder, &overload, s32_value(0), 1);
+        Return(rns_add(&fn_builder, a, b));
+    }
+
+    typedef s64 RetS64_Void(void);
+    RetS64_Void* check_func = value_as_function(check, RetS64_Void);
+    s64 result = check_func();
+    redassert(result == 12);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    test_fibonacci();
+    test_basic_adhoc_polymorphism();
 }
 
 s32 main(s32 argc, char* argv[])
