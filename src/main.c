@@ -236,6 +236,7 @@ typedef struct DescriptorInteger
 
 typedef struct DescriptorStructField
 {
+    const char* name;
     const struct Descriptor* descriptor;
     s64 offset;
 } DescriptorStructField;
@@ -355,6 +356,7 @@ typedef struct Value
     s64 count;
 } Value;
 
+
 ValueOverload* get_if_single_overload(const Value* value)
 {
     if (value->count == 1)
@@ -378,6 +380,25 @@ Descriptor descriptor_void =
 {
     .type = DescriptorType_Void,
 };
+
+// @Volatile @Reflection
+typedef struct DescriptorStructReflection
+{
+    s64 field_count;
+} DescriptorStructReflection;
+DescriptorStructField struct_reflection_fields[] =
+{
+    [0] = { .name = "field_count", .offset = 0, .descriptor = &descriptor_s64 },
+};
+
+Descriptor descriptor_struct_reflection = {
+    .type = DescriptorType_Struct,
+    .struct_ = {
+        .field_count = array_length(struct_reflection_fields),
+        .field_list = struct_reflection_fields,
+    },
+};
+
 
 ValueOverload void_value_overload = {
     .descriptor = &descriptor_void,
@@ -698,6 +719,27 @@ static inline Value* s64_value(s64 v)
     return single_overload_value(result);
 }
 
+Value* value_size(Value* value)
+{
+    s32 size = 0;
+    for (s32 i = 0; i < value->count; i++)
+    {
+        ValueOverload* overload = &value->list[i];
+        s32 overload_size = (s32)descriptor_size(overload->descriptor);
+
+        if (i == 0)
+        {
+            size = (s32)descriptor_size(overload->descriptor);
+        }
+        else
+        {
+            redassert(size == overload_size);
+        }
+    }
+
+    redassert(size);
+    return s64_value(size);
+}
 
 Descriptor* C_parse_type(const char* type_str, s64 length)
 {
@@ -2756,6 +2798,15 @@ void resolve_jump_patch_list(FunctionBuilder* fn_builder, JumpPatchList* list)
     }
 }
 
+Value* fn_reflect(FunctionBuilder* fn_builder, Descriptor* descriptor)
+{
+    ValueOverload* result = stack_reserve(fn_builder, &descriptor_struct_reflection);
+    redassert(descriptor->type == DescriptorType_Struct);
+    move_value(fn_builder, result, get_if_single_overload(s64_value(descriptor->struct_.field_count)));
+
+    return single_overload_value(result);
+}
+
 FunctionBuilder fn_begin(Value** result)
 {
     FunctionBuilder fn_builder =
@@ -3088,13 +3139,14 @@ StructBuilder struct_begin(void)
     return (const StructBuilder) { 0 };
 }
 
-DescriptorStructField* struct_add_field(StructBuilder* struct_builder, const Descriptor* descriptor)
+DescriptorStructField* struct_add_field(StructBuilder* struct_builder, const Descriptor* descriptor, const char* name)
 {
     StructBuilderField* field = NEW(StructBuilderField, 1);
 
     u32 size = (u32)descriptor_size(descriptor);
     struct_builder->offset = align(struct_builder->offset, size);
 
+    field->descriptor.name = name;
     field->descriptor.descriptor = descriptor;
     field->descriptor.offset = struct_builder->offset;
 
@@ -3129,6 +3181,36 @@ Descriptor* struct_end(StructBuilder* struct_builder)
     };
 
     return result;
+}
+
+Value* struct_get_field(Value* struct_value, const char* name)
+{
+    ValueOverload* overload = get_if_single_overload(struct_value);
+    redassert(overload);
+    Descriptor* descriptor = overload->descriptor;
+    redassert(descriptor->type == DescriptorType_Struct);
+
+    for (s64 i = 0; i < descriptor->struct_.field_count; ++i)
+    {
+        DescriptorStructField* field = &descriptor->struct_.field_list[i];
+        if (strcmp(field->name, name) == 0)
+        {
+            ValueOverload* result = NEW(ValueOverload, 1);
+            // support more operands
+            //redassert(overload->descriptor->type == OperandType_MemoryIndirect);
+            Operand operand = overload->operand;
+            operand.mem_indirect.displacement += (s32)field->offset;
+            *result = (const ValueOverload){
+                .descriptor = (Descriptor*)field->descriptor,
+                .operand = operand,
+            };
+
+            return single_overload_value(result);
+        }
+    }
+
+    redassert(!"Couldn't find a field with specified name");
+    return null;
 }
 
 typedef enum CompareOp
@@ -3501,9 +3583,9 @@ void test_structs(void)
 {
     StructBuilder struct_builder = struct_begin();
 
-    DescriptorStructField* width_field = struct_add_field(&struct_builder, &descriptor_s32);
-    DescriptorStructField* height_field = struct_add_field(&struct_builder, &descriptor_s64);
-    DescriptorStructField* dummy_field = struct_add_field(&struct_builder, &descriptor_s32);
+    DescriptorStructField* width_field = struct_add_field(&struct_builder, &descriptor_s32, "width");
+    DescriptorStructField* height_field = struct_add_field(&struct_builder, &descriptor_s64, "height");
+    DescriptorStructField* dummy_field = struct_add_field(&struct_builder, &descriptor_s32, "dummy");
 
     Descriptor* size_struct_descriptor = struct_end(&struct_builder);
     Descriptor* size_struct_pointer_desc = descriptor_pointer_to(size_struct_descriptor);
@@ -3591,10 +3673,10 @@ void test_type_checker(void)
     redassert(!typecheck((Descriptor*) { descriptor_array_of(&descriptor_s32, 2) }, (Descriptor*) { descriptor_array_of(&descriptor_s32, 3) }));
 
     StructBuilder struct_buildera = struct_begin();
-    struct_add_field(&struct_buildera, &descriptor_s32);
+    struct_add_field(&struct_buildera, &descriptor_s32, "foo1");
     Descriptor* a = struct_end(&struct_buildera);
     StructBuilder struct_builderb = struct_begin();
-    struct_add_field(&struct_builderb, &descriptor_s32);
+    struct_add_field(&struct_builderb, &descriptor_s32, "foo1");
     Descriptor* b = struct_end(&struct_builderb);
 
     redassert(typecheck(a, a));
@@ -3697,42 +3779,43 @@ void test_basic_parametric_polymorphism(void)
     }
 }
 
-// @TODO: fix
-void test_basic_adhoc_polymorphism(void)
+#define SizeOfDescriptor(_descriptor_) s64_value(descriptor_size(_descriptor_))
+#define SizeOfValue(_value_) value_size(_value_)
+#define ReflectDescriptor(_descriptor_) fn_reflect(&fn_builder, _descriptor_)
+void test_sizeof_values(void)
 {
-    Function(sizeof_s32)
-    {
-        Arg_s32(x);
-        (void)x;
-        Return(s64_value(sizeof(s32)));
-    }
-    Function(sizeof_s64)
-    {
-        Arg_s64(x);
-        (void)x;
-        Return(s64_value(sizeof(s64)));
-    }
-    ValueOverload overload_list[] = {
-        *get_if_single_overload(sizeof_s32),
-        *get_if_single_overload(sizeof_s64),
-    };
+    Value* sizeof_s32 = SizeOfValue(s32_value(0));
+    ValueOverload* overload = get_if_single_overload(sizeof_s32);
+    redassert(overload);
+    redassert(overload->operand.type == OperandType_Immediate && overload->operand.size == OperandSize_64);
+    redassert(overload->operand.imm._64 == 4);
+}
 
-    Value overload = {
-        .list = overload_list,
-        .count = array_length(overload_list),
-    };
+void test_sizeof_types(void)
+{
+    Value* sizeof_s32 = SizeOfDescriptor(&descriptor_s32);
+    ValueOverload* overload = get_if_single_overload(sizeof_s32);
+    redassert(overload);
+    redassert(overload->operand.type == OperandType_Immediate && overload->operand.size == OperandSize_64);
+    redassert(overload->operand.imm._64 == 4);
+}
 
-    Function(check)
+typedef s32 RetS32ParamVoid(void);
+void test_struct_reflection(void)
+{
+    StructBuilder struct_builder = struct_begin();
+    DescriptorStructField* width_field = struct_add_field(&struct_builder, &descriptor_s32, "x");
+    DescriptorStructField* height_field = struct_add_field(&struct_builder, &descriptor_s32, "y");
+    Descriptor* point_struct_descriptor = struct_end(&struct_builder);
+
+    Function(field_count)
     {
-        Value* a = call_function_value(&fn_builder, &overload, s64_value(0), 1);
-        Value* b = call_function_value(&fn_builder, &overload, s32_value(0), 1);
-        Return(rns_add(&fn_builder, a, b));
+        ValueOverload* overload = get_if_single_overload(fn_reflect(&fn_builder, point_struct_descriptor));
+        Stack(struct_, &descriptor_struct_reflection, overload);
+        Return(struct_get_field(struct_, "field_count"));
     }
-
-    typedef s64 RetS64_Void(void);
-    RetS64_Void* check_func = value_as_function(check, RetS64_Void);
-    s64 result = check_func();
-    redassert(result == 12);
+    s32 count = value_as_function(field_count, RetS32ParamVoid)();
+    redassert(count == 2);
 }
 
 void test_polymorphic_values(void)
@@ -3765,7 +3848,7 @@ void test_polymorphic_values(void)
 
 void wna_main(s32 argc, char* argv[])
 {
-    test_polymorphic_values();
+    test_struct_reflection();
 }
 
 s32 main(s32 argc, char* argv[])
