@@ -1,6 +1,7 @@
 #include "types.h"
 #include "os.h"
 #include "execution_buffer.h"
+ExecutionBuffer eb = { 0 };
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -2253,9 +2254,10 @@ typedef struct StackPatch
 typedef struct FunctionBuilder
 {
     DescriptorFunction descriptor;
-    ExecutionBuffer eb;
+    ExecutionBuffer* eb;
     StackPatch stack_displacements[MAX_DISPLACEMENT_COUNT];
     s64 stack_displacement_count;
+    u8* code;
 
     JumpPatchList* return_patch_list;
     Value** result;
@@ -2486,11 +2488,11 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
 
     if (rex_byte)
     {
-        u8_append(&fn_builder->eb, rex_byte);
+        u8_append(fn_builder->eb, rex_byte);
     }
     else if ((instruction.operands[0].type == OperandType_Register && instruction.operands[0].size == OperandSize_16) || (instruction.operands[1].type == OperandType_Register && instruction.operands[1].size == OperandSize_16) || encoding.options.explicit_byte_size == OperandSize_16)
     {
-        u8_append(&fn_builder->eb, OperandSizeOverride);
+        u8_append(fn_builder->eb, OperandSizeOverride);
     }
 
     for (u32 i = 0; i < array_length(op_code); i++)
@@ -2498,18 +2500,18 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
         u8 op_code_byte = op_code[i];
         if (op_code_byte)
         {
-            u8_append(&fn_builder->eb, op_code_byte);
+            u8_append(fn_builder->eb, op_code_byte);
         }
     }
 
     if (need_mod_rm)
     {
-        u8_append(&fn_builder->eb, mod_r_m);
+        u8_append(fn_builder->eb, mod_r_m);
     }
     // SIB
     if (need_sib)
     {
-        u8_append(&fn_builder->eb, sib_byte);
+        u8_append(fn_builder->eb, sib_byte);
     }
 
     // DISPLACEMENT
@@ -2523,22 +2525,22 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
                 switch (mod)
                 {
                     case Mod_Displacement_8:
-                        s8_append(&fn_builder->eb, (s8)op.mem_indirect.displacement);
+                        s8_append(fn_builder->eb, (s8)op.mem_indirect.displacement);
                         break;
                     case Mod_Displacement_32:
                         if (need_sib)
                         {
-                            offset_of_displacement = fn_builder->eb.len;
+                            offset_of_displacement = fn_builder->eb->len;
                             stack_size = op.size;
                             redassert(fn_builder->stack_displacement_count < MAX_DISPLACEMENT_COUNT);
-                            s32* location = (s32*)(fn_builder->eb.ptr + offset_of_displacement);
+                            s32* location = (s32*)(fn_builder->eb->ptr + offset_of_displacement);
                             fn_builder->stack_displacements[fn_builder->stack_displacement_count] = (const StackPatch){
                                 .location = location,
                                 .size = stack_size,
                             };
                             fn_builder->stack_displacement_count++;
                         }
-                        s32_append(&fn_builder->eb, op.mem_indirect.displacement);
+                        s32_append(fn_builder->eb, op.mem_indirect.displacement);
                         break;
                     default:
                         break;
@@ -2556,16 +2558,16 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
             switch (operand.size)
             {
                 case OperandSize_8:
-                    u8_append(&fn_builder->eb, operand.imm._8);
+                    u8_append(fn_builder->eb, operand.imm._8);
                     break;
                 case OperandSize_16:
-                    u16_append(&fn_builder->eb, operand.imm._16);
+                    u16_append(fn_builder->eb, operand.imm._16);
                     break;
                 case OperandSize_32:
-                    u32_append(&fn_builder->eb, operand.imm._32);
+                    u32_append(fn_builder->eb, operand.imm._32);
                     break;
                 case OperandSize_64:
-                    u64_append(&fn_builder->eb, operand.imm._64);
+                    u64_append(fn_builder->eb, operand.imm._64);
                     break;
                 default:
                     RED_NOT_IMPLEMENTED;
@@ -2577,16 +2579,16 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
             switch (operand.size)
             {
                 case OperandSize_8:
-                    u8_append(&fn_builder->eb, operand.rel._8);
+                    u8_append(fn_builder->eb, operand.rel._8);
                     break;
                 case OperandSize_16:
-                    u16_append(&fn_builder->eb, operand.rel._16);
+                    u16_append(fn_builder->eb, operand.rel._16);
                     break;
                 case OperandSize_32:
-                    u32_append(&fn_builder->eb, operand.rel._32);
+                    u32_append(fn_builder->eb, operand.rel._32);
                     break;
                 case OperandSize_64:
-                    u64_append(&fn_builder->eb, operand.rel._64);
+                    u64_append(fn_builder->eb, operand.rel._64);
                     break;
                 default:
                     RED_NOT_IMPLEMENTED;
@@ -2598,7 +2600,7 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
 
 #define Function(_name_)\
 Value* _name_ = NULL;\
-for (FunctionBuilder fn_builder = fn_begin(&_name_); !(fn_is_frozen(&fn_builder)); fn_end(&fn_builder))
+for (FunctionBuilder fn_builder = fn_begin(&_name_, &eb); !(fn_is_frozen(&fn_builder)); fn_end(&fn_builder))
 
 #define Return(_value_)\
 fn_return(&fn_builder, _value_)
@@ -2639,11 +2641,13 @@ move_value(&fn_builder, get_if_single_overload(_id_), (_value_))
 #define TEST_MODE 0
 #define INSTR(...) (Instruction) { __VA_ARGS__ }
 #define EXPECTED(...) __VA_ARGS__
-static bool test_instruction(const char* test_name, Instruction instruction, u8* expected_bytes, u8 expected_byte_count)
+static bool test_instruction(ExecutionBuffer* eb, const char* test_name, Instruction instruction, u8* expected_bytes, u8 expected_byte_count)
 {
     const u32 buffer_size = 64;
-    FunctionBuilder fn_builder = { 0 };
-    fn_builder.eb = give_me(buffer_size);
+    FunctionBuilder fn_builder = {
+        .eb = eb,
+    };
+    *fn_builder.eb = give_me(1024);
     encode(&fn_builder, instruction);
 
     ExecutionBuffer expected = give_me(buffer_size);
@@ -2651,43 +2655,43 @@ static bool test_instruction(const char* test_name, Instruction instruction, u8*
     {
         u8_append(&expected, expected_bytes[i]);
     }
-    return test_buffer(&fn_builder.eb, expected.ptr, expected.len, test_name);
+    return test_buffer(fn_builder.eb, expected.ptr, expected.len, test_name);
 }
 
-#define TEST(test_name, _instr, _test_bytes)\
+#define TEST(eb, test_name, _instr, _test_bytes)\
     u8 expected_bytes_ ## test_name [] = { _test_bytes };\
-    test_instruction(#test_name, _instr, expected_bytes_ ## test_name, array_length(expected_bytes_ ## test_name )
+    test_instruction(eb, #test_name, _instr, expected_bytes_ ## test_name, array_length(expected_bytes_ ## test_name )
 
 void test_main(s32 argc, char* argv[])
 {
-    TEST(add_ax_imm16, INSTR(add, { reg.ax, imm16(0xffff) }), EXPECTED(0x66, 0x05, 0xff, 0xff)));
-    TEST(add_al_imm8, INSTR(add, { reg.al, imm8(0xff) }), EXPECTED(0x04, UINT8_MAX)));
-    TEST(add_eax_imm32, INSTR(add, { reg.eax, imm32(0xffffffff) }), EXPECTED(0x05, 0xff, 0xff, 0xff, 0xff)));
-    TEST(add_rax_imm32, INSTR(add, { reg.rax, imm32(0xffffffff) }), EXPECTED(0x48, 0x05, 0xff, 0xff, 0xff, 0xff)));
-    TEST(add_rm8_imm8, INSTR(add, { reg.bl, imm8(0xff) }), EXPECTED(0x80, 0xc3, 0xff)));
-    TEST(add_rm16_imm16, INSTR(add, { reg.bx, imm16(0xffff) }), EXPECTED(0x66, 0x81, 0xc3, 0xff, 0xff)));
-    TEST(add_rm32_imm32, INSTR(add, { reg.ebx, imm32(0xffffffff) }), EXPECTED(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(add_rm64_imm32, INSTR(add, { reg.rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(call_r64, INSTR(call, { reg.rax }), EXPECTED(0xff, 0xd0)));
-    TEST(mov_bl_cl, INSTR(mov, { reg.bl, reg.cl }), EXPECTED(0x88, 0xcb)));
-    TEST(mov_bx_cx, INSTR(mov, { reg.bx, reg.cx }), EXPECTED(0x66, 0x89, 0xcb)));
-    TEST(mov_ebx_ecx, INSTR(mov, { reg.ebx, reg.ecx }), EXPECTED(0x89, 0xcb)));
-    TEST(mov_rbx_rcx, INSTR(mov, { reg.rbx, reg.rcx }), EXPECTED(0x48, 0x89, 0xcb)));
-    TEST(mov_al_imm8, INSTR(mov, { reg.al, imm8(0xff) }), EXPECTED(0xb0, UINT8_MAX)));
-    TEST(mov_ax_imm16, INSTR(mov, { reg.ax, imm16(0xffff) }), EXPECTED(0x66, 0xb8, 0xff, 0xff)));
-    TEST(mov_eax_imm32, INSTR(mov, { reg.eax, imm32(0xffffffff) }), EXPECTED(0xb8, 0xff, 0xff)));
-    TEST(mov_rax_imm32, INSTR(mov, { reg.rax, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_rax_imm64, INSTR(mov, { reg.rax, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_r8_imm8,   INSTR(mov, { reg.bl, imm8(0xff) }), EXPECTED(0xb3, 0xff)));
-    TEST(mov_r16_imm16, INSTR(mov, { reg.bx, imm16(0xffff) }), EXPECTED(0x66, 0xbb, 0xff, 0xff)));
-    TEST(mov_r32_imm32, INSTR(mov, { reg.ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_r64_imm64, INSTR(mov, { reg.rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_rm64_imm32, INSTR(mov, { reg.rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff)));
-    TEST(mov_qword_ptr_r64_offset_r64, INSTR(mov, { stack(-8, 8), reg.rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
-    TEST(mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { reg.rax, stack(-8, 8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
-    TEST(pop_r64, INSTR(pop, { reg.rbp }), EXPECTED(0x5d)));
-    TEST(push_r64, INSTR(push, { reg.rbp }), EXPECTED(0x55)));
-    TEST(push_r9, INSTR(push, { reg.r9 }), EXPECTED(0x41, 0x51)));
+    TEST(&eb, add_ax_imm16,              INSTR(add, { reg.ax, imm16(0xffff) }), EXPECTED(0x66, 0x05, 0xff, 0xff)));
+    TEST(&eb, add_al_imm8,               INSTR(add, { reg.al, imm8(0xff) }), EXPECTED(0x04, UINT8_MAX)));
+    TEST(&eb, add_eax_imm32,             INSTR(add, { reg.eax, imm32(0xffffffff) }), EXPECTED(0x05, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, add_rax_imm32,             INSTR(add, { reg.rax, imm32(0xffffffff) }), EXPECTED(0x48, 0x05, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, add_rm8_imm8,              INSTR(add, { reg.bl, imm8(0xff) }), EXPECTED(0x80, 0xc3, 0xff)));
+    TEST(&eb, add_rm16_imm16,            INSTR(add, { reg.bx, imm16(0xffff) }), EXPECTED(0x66, 0x81, 0xc3, 0xff, 0xff)));
+    TEST(&eb, add_rm32_imm32,            INSTR(add, { reg.ebx, imm32(0xffffffff) }), EXPECTED(0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, add_rm64_imm32,            INSTR(add, { reg.rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0x81, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, call_r64,                  INSTR(call, { reg.rax }), EXPECTED(0xff, 0xd0)));
+    TEST(&eb, mov_bl_cl,                 INSTR(mov, { reg.bl, reg.cl }), EXPECTED(0x88, 0xcb)));
+    TEST(&eb, mov_bx_cx,                 INSTR(mov, { reg.bx, reg.cx }), EXPECTED(0x66, 0x89, 0xcb)));
+    TEST(&eb, mov_ebx_ecx,               INSTR(mov, { reg.ebx, reg.ecx }), EXPECTED(0x89, 0xcb)));
+    TEST(&eb, mov_rbx_rcx,               INSTR(mov, { reg.rbx, reg.rcx }), EXPECTED(0x48, 0x89, 0xcb)));
+    TEST(&eb, mov_al_imm8,               INSTR(mov, { reg.al, imm8(0xff) }), EXPECTED(0xb0, UINT8_MAX)));
+    TEST(&eb, mov_ax_imm16,              INSTR(mov, { reg.ax, imm16(0xffff) }), EXPECTED(0x66, 0xb8, 0xff, 0xff)));
+    TEST(&eb, mov_eax_imm32,             INSTR(mov, { reg.eax, imm32(0xffffffff) }), EXPECTED(0xb8, 0xff, 0xff)));
+    TEST(&eb, mov_rax_imm32,             INSTR(mov, { reg.rax, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, mov_rax_imm64,             INSTR(mov, { reg.rax, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, mov_r8_imm8,               INSTR(mov, { reg.bl, imm8(0xff) }), EXPECTED(0xb3, 0xff)));
+    TEST(&eb, mov_r16_imm16,             INSTR(mov, { reg.bx, imm16(0xffff) }), EXPECTED(0x66, 0xbb, 0xff, 0xff)));
+    TEST(&eb, mov_r32_imm32,             INSTR(mov, { reg.ebx, imm32(0xffffffff) }), EXPECTED(0xbb, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, mov_r64_imm64,             INSTR(mov, { reg.rbx, imm64(0xffffffffffffffff) }), EXPECTED(0x48, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, mov_rm64_imm32,            INSTR(mov, { reg.rbx, imm32(0xffffffff) }), EXPECTED(0x48, 0xc7, 0xc3, 0xff, 0xff, 0xff, 0xff)));
+    TEST(&eb, mov_qword_ptr_r64_offset_r64,     INSTR(mov, { stack(-8, 8), reg.rdi }), EXPECTED(0x48, 0x89, 0x7d, 0xf8)));
+    TEST(&eb, mov_rax_qword_ptr_r64_offset_r64, INSTR(mov, { reg.rax, stack(-8, 8)}), EXPECTED(0x48, 0x8b, 0x45, 0xf8)));
+    TEST(&eb, pop_r64,                  INSTR(pop, { reg.rbp }), EXPECTED(0x5d)));
+    TEST(&eb, push_r64, INSTR(push, { reg.rbp }), EXPECTED(0x55)));
+    TEST(&eb, push_r9, INSTR(push, { reg.r9 }), EXPECTED(0x41, 0x51)));
 }
 
 ValueOverload* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
@@ -2745,34 +2749,34 @@ void move_value(FunctionBuilder* fn_builder, const ValueOverload* a, const Value
 
 LabelPatch32 make_jnz(FunctionBuilder* fn_builder)
 {
-    encode(fn_builder, (Instruction) { jnz, { rel32(0xcccccccc) } });
-    s64 ip = fn_builder->eb.len;
-    s32* patch = (s32*)fn_builder->eb.ptr[ip - sizeof(u32)];
+    encode(fn_builder, (Instruction) { jnz, { rel32(0xcc) } });
+    s64 ip = fn_builder->eb->len;
+    s32* patch = (s32*)&fn_builder->eb->ptr[ip - sizeof(u32)];
 
     return (LabelPatch32) { patch, ip };
 }
 
 LabelPatch32 make_jz(FunctionBuilder* fn_builder)
 {
-    encode(fn_builder, (Instruction) { jz, { rel32(0xcccccccc) } });
-    s64 ip = fn_builder->eb.len;
-    s32* patch = (s32*)&fn_builder->eb.ptr[ip - sizeof(u32)];
+    encode(fn_builder, (Instruction) { jz, { rel32(0xcc) } });
+    s64 ip = fn_builder->eb->len;
+    s32* patch = (s32*)&fn_builder->eb->ptr[ip - sizeof(u32)];
 
     return (LabelPatch32) { patch, ip };
 }
 
 LabelPatch32 make_jmp(FunctionBuilder* fn_builder)
 {
-    encode(fn_builder, (Instruction) { jmp, { rel32(0xcccccccc) } });
-    s64 ip = fn_builder->eb.len;
-    s32* patch = (s32*)&fn_builder->eb.ptr[ip - sizeof(u32)];
+    encode(fn_builder, (Instruction) { jmp, { rel32(0xcc) } });
+    s64 ip = fn_builder->eb->len;
+    s32* patch = (s32*)&fn_builder->eb->ptr[ip - sizeof(u32)];
 
     return (LabelPatch32) { patch, ip };
 }
 
 void make_jump_label(FunctionBuilder* fn_builder, LabelPatch32 patch)
 {
-    *patch.address = (s32)(fn_builder->eb.len - patch.ip);;
+   *patch.address = (s32)(fn_builder->eb->len - patch.ip);
 }
 
 void make_jump_ip(LabelPatch32 patch, u64 current_ip)
@@ -2807,13 +2811,16 @@ Value* fn_reflect(FunctionBuilder* fn_builder, Descriptor* descriptor)
     return single_overload_value(result);
 }
 
-FunctionBuilder fn_begin(Value** result)
+FunctionBuilder fn_begin(Value** result, ExecutionBuffer* eb)
 {
     FunctionBuilder fn_builder =
     {
-        .eb = give_me(1024),
+        .eb = eb,
         .result = result,
     };
+    *(fn_builder.eb) = give_me(1024);
+    fn_builder.code = eb->ptr + eb->len;
+    
     Descriptor* descriptor = NEW(Descriptor, 1);
     *descriptor = (const Descriptor){
         .type = DescriptorType_Function,
@@ -2824,7 +2831,7 @@ FunctionBuilder fn_begin(Value** result)
     *fn_value = (const ValueOverload)
     {
         .descriptor = descriptor,
-        .operand = imm64((u64)fn_builder.eb.ptr),
+        .operand = imm64((u64)fn_builder.code),
     };
 
     *result = single_overload_value(fn_value);
@@ -2901,11 +2908,12 @@ void fn_end(FunctionBuilder* fn_builder)
             s8 alignment = 0x8;
             fn_builder->stack_offset += fn_builder->max_call_parameter_stack_size;
             s32 stack_size = (s32)align(fn_builder->stack_offset, 16) + alignment;
-            s64 current_function_code_size = fn_builder->eb.len;
-            fn_builder->eb.len = 0;
+
+            s64 current_function_code_size = fn_builder->eb->len;
+            fn_builder->eb->len = fn_builder->code - fn_builder->eb->ptr;
 
             encode(fn_builder, (Instruction) { sub, { reg.rsp, imm32(stack_size) } });
-            fn_builder->eb.len = current_function_code_size;
+            fn_builder->eb->len = current_function_code_size;
 
             for (s64 i = 0; i < fn_builder->stack_displacement_count; i++)
             {
@@ -3113,7 +3121,7 @@ void make_loop_end(FunctionBuilder* fn_builder, LoopBuilder* loop_builder)
 
 #define LOOP\
     for (\
-        LoopBuilder loop_builder = { .start_ip = fn_builder.eb.len, .jump_patch_list = NULL };\
+        LoopBuilder loop_builder = { .start_ip = fn_builder.eb->len, .jump_patch_list = NULL };\
         !loop_builder.done;\
         make_loop_end(&fn_builder, &loop_builder)\
         )
@@ -3848,7 +3856,8 @@ void test_polymorphic_values(void)
 
 void wna_main(s32 argc, char* argv[])
 {
-    test_struct_reflection();
+    tests_arguments_on_the_stack();
+    //test_struct_reflection();
 }
 
 s32 main(s32 argc, char* argv[])
