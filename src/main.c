@@ -2709,6 +2709,7 @@ move_value(&fn_builder, get_if_single_overload(_id_), (_value_))
 #define MulS(_a_, _b_) rns_signed_mul_immediate(&fn_builder, _a_, _b_)
 #define DivS(_a_, _b_) rns_signed_div(&fn_builder, _a_, _b_)
 
+#define Call(_target_, ...) call_function_value(&fn_builder, (_target_), (Value**)(Value*[]){__VA_ARGS__}, array_length((Value*[]){__VA_ARGS__}))
 
 #define TEST_MODE 0
 #define INSTR(...) (Instruction) { __VA_ARGS__ }
@@ -3152,7 +3153,7 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
     return single_overload_value(result);
 }
 
-Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value* arg_list, s64 arg_count)
+Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value** arg_list, s64 arg_count)
 {
     ValueOverload** arg_overload_list = NEW(ValueOverload*, arg_count);
 
@@ -3167,7 +3168,7 @@ Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value* arg_li
         for (s64 arg_index = 0; arg_index < arg_count; arg_index++)
         {
             // TODO: @Overloads
-            ValueOverload* arg_overload = get_if_single_overload(&arg_list[arg_index]);
+            ValueOverload* arg_overload = get_if_single_overload(arg_list[arg_index]);
             redassert(arg_overload);
             arg_overload_list[arg_index] = arg_overload;
 
@@ -3865,7 +3866,7 @@ void test_fibonacci(void)
         }
         Stack_s64(n_minus_one, get_if_single_overload(rns_sub(&fn_builder, n, s64_value(1))));
         Stack_s64(n_minus_two, get_if_single_overload(rns_sub(&fn_builder, n, s64_value(2))));
-        Return(rns_add(&fn_builder, call_function_value(&fn_builder, fib, n_minus_one, 1), call_function_value(&fn_builder, fib, n_minus_two, 1)));
+        Return(rns_add(&fn_builder, Call(fib, n_minus_one), Call(fib, n_minus_two)));
     }
 
     s64_s64* fib_fn = value_as_function(fib, s64_s64);
@@ -3908,9 +3909,9 @@ void test_basic_parametric_polymorphism(void)
     {
         Value* value_s64 = s64_value(0);
         Value* value_s32 = s32_value(0);
-        call_function_value(&fn_builder, id_s64, value_s64, 1);
-        call_function_value(&fn_builder, id_s32, value_s32, 1);
-        call_function_value(&fn_builder, add_two_s64, value_s64, 1);
+        Call(id_s64, value_s64);
+        Call(id_s32, value_s32);
+        Call(add_two_s64, value_s64);
     }
 }
 
@@ -3990,7 +3991,7 @@ void test_rip_addressing_mode(void)
     }
     Function(checker_value)
     {
-        Return(call_function_value(&fn_builder, return_42, NULL, 0));
+        Return(Call(return_42, NULL));
     }
 
     RetS32ParamVoid* fn = value_as_function(checker_value, RetS32ParamVoid);
