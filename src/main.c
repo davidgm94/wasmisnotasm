@@ -767,6 +767,7 @@ static inline Value* s64_value(s64 v)
     return single_overload_value(result);
 }
 
+
 Value* value_size(Value* value)
 {
     s32 size = 0;
@@ -789,154 +790,136 @@ Value* value_size(Value* value)
     return s64_value(size);
 }
 
-Descriptor* C_parse_type(const char* type_str, s64 length)
+bool memory_range_equal_to_c_string(const void* range_start, const void* range_end, const char* string)
 {
-    Descriptor* descriptor = null;
+    s64 length = ((char*)range_end) - ((char*)range_start);
+    s64 string_length = strlen(string);
+    if (string_length != length) return false;
+    return memcmp(range_start, string, string_length) == 0;
+}
+Descriptor * C_parse_type(
+  const char *range_start,
+  const char *range_end
+) {
+  Descriptor *descriptor = 0;
 
-    for (u32 i = 0; i < length; i++)
-    {
-        if (!(type_str[i] == ' ' || type_str[i] == ')' || type_str[i] == '*'))
-        {
-            continue;
-        }
-
-        if (i != 0)
-        {
-            if (strncmp(type_str, "char", i + 1) == 0)
-            {
-                descriptor = (Descriptor*)&descriptor_u8;
-            }
-            else if (strncmp(type_str, "int", i + 1) == 0)
-            {
-                descriptor = (Descriptor*)&descriptor_s32;
-            }
-            else if (strncmp(type_str, "void", i + 1) == 0)
-            {
-                descriptor = (Descriptor*)&descriptor_void;
-            }
-            else if (strncmp(type_str, "const", i + 1) == 0)
-            {
-                // @TODO: support const values
-            }
-            else
-            {
-                redassert(!"Unsupported argument type");
-            }
-        }
-        
-        if (type_str[i] == '*')
-        {
-            redassert(descriptor);
-            Descriptor* previous_descriptor = descriptor;
-            descriptor = NEW(Descriptor, 1);
-            *descriptor = (const Descriptor){
-                .type = DescriptorType_Pointer,
-                .pointer_to = previous_descriptor,
-            };
-
-        }
-
-        type_str++;
+  const char *start = range_start;
+  for(const char *ch = range_start; ch <= range_end; ++ch) {
+    if (!(*ch == ' ' || *ch == '*' || ch == range_end)) continue;
+    if (start != ch) {
+      if (memory_range_equal_to_c_string(start, ch, "char")) {
+        descriptor = &descriptor_s8;
+      } else if (memory_range_equal_to_c_string(start, ch, "int")) {
+        descriptor = &descriptor_s32;
+      } else if (memory_range_equal_to_c_string(start, ch, "void")) {
+        descriptor = &descriptor_void;
+      } else if (memory_range_equal_to_c_string(start, ch, "const")) {
+        // TODO support const values?
+      } else {
+        redassert(!"Unsupported argument type");
+      }
     }
-
-    return descriptor;
+    if (*ch == '*') {
+      redassert(descriptor);
+      Descriptor *previous_descriptor = descriptor;
+      descriptor = NEW(Descriptor, 1);
+      *descriptor = (const Descriptor) {
+        .type = DescriptorType_Pointer,
+        .pointer_to = previous_descriptor,
+      };
+    }
+    start = ch + 1;
+  }
+  return descriptor;
 }
 
-ValueOverload* C_function_return_value(const char* prototype)
-{
-    char* ch = strchr(prototype, '(');
-    redassert(ch);
-    --ch;
+ValueOverload* C_function_return_value( const char *forward_declaration) {
+  char *ch = strchr(forward_declaration, '(');
+  redassert(ch);
+  --ch;
 
-    // skip whitespace before (
-    for (; *ch == ' '; --ch);
-    for (;
-        (*ch >= 'a' && *ch <= 'z') ||
-        (*ch >= 'A' && *ch <= 'Z') ||
-        (*ch >= '0' && *ch <= '9') ||
-        *ch == '_';
-        --ch
-        )
-        // skip whitespace before function name
-        for (; *ch == ' '; --ch);
-    ++ch;
-    Descriptor* descriptor = C_parse_type(prototype, ch - prototype);
-    redassert(descriptor);
-    switch (descriptor->type) {
-        case DescriptorType_Void:
-            return &void_value_overload;
-        case DescriptorType_Function:
-        case DescriptorType_Integer:
-        case DescriptorType_Pointer:
-        {
-            ValueOverload* return_value = NEW(ValueOverload, 1);
-            *return_value = (const ValueOverload){
-              .descriptor = descriptor,
-              .operand = reg.rax,
-            };
-            return (return_value);
-        }
-        default:
-            redassert(!"Unsupported return type");
+  // skip whitespace before (
+  for(; *ch == ' '; --ch);
+  for(;
+    (*ch >= 'a' && *ch <= 'z') ||
+    (*ch >= 'A' && *ch <= 'Z') ||
+    (*ch >= '0' && *ch <= '9') ||
+    *ch == '_';
+    --ch
+  )
+  // skip whitespace before function name
+  for(; *ch == ' '; --ch);
+  ++ch;
+  Descriptor *descriptor = C_parse_type(forward_declaration, ch);
+  redassert(descriptor);
+  switch(descriptor->type) {
+    case DescriptorType_Void: {
+      return &void_value_overload;
     }
-    return null;
-}
-
-Value* C_function_value(const char* proto, u64 address)
-{
-    Descriptor* descriptor = NEW(Descriptor, 1);
-    *descriptor = (const Descriptor){
-        .type = DescriptorType_Function,
-        .function = {0},
-    };
-
-    ValueOverload* result = NEW(ValueOverload, 1);
-    *result = (ValueOverload) {
+    case DescriptorType_Function:
+    case DescriptorType_Integer:
+    case DescriptorType_Pointer: {
+      ValueOverload *return_value = NEW(ValueOverload, 1);
+      *return_value = (const ValueOverload) {
         .descriptor = descriptor,
-        .operand = imm64(address),
-    };
-
-    result->descriptor->function.return_value = C_function_return_value(proto);
-
-    char* it = strchr(proto, 'C');
-    redassert(it);
-    it++;
-
-    char* start = it;
-
-    Descriptor* argument_descriptor = null;
-
-    for(; *it; it++)
-    {
-        if (*it == ',')
-        {
-            redassert(!"Multiple arguments are not supported");
-        }
-        if (*it == ' ' || *it == ')' || *it == '*')
-        {
-            s64 length = it - start;
-
-            if (start != it)
-            {
-                argument_descriptor = C_parse_type(start, length);
-            }
-            start = it + 1;
-        }
+        .operand = reg.eax,
+      };
+      return return_value;
     }
-
-    if (argument_descriptor && argument_descriptor->type != DescriptorType_Void)
-    {
-        ValueOverload* arg = NEW(ValueOverload, 1);
-        arg->descriptor = argument_descriptor;
-        arg->operand = get_reg(OperandSize_64, parameter_registers[0]);
-
-        result->descriptor->function.arg_list = arg;
-        result->descriptor->function.arg_count = 1;
+    case DescriptorType_TaggedUnion:
+    case DescriptorType_FixedSizeArray:
+    case DescriptorType_Struct:
+    default: {
+      redassert(!"Unsupported return type");
     }
-
-    return single_overload_value(result);
+  }
+  return 0;
 }
+Value *
+C_function_value(
+  const char *forward_declaration,
+  u64 fn
+) {
+  Descriptor *descriptor = NEW(Descriptor, 1);
+  *descriptor = (const Descriptor) {
+    .type = DescriptorType_Function,
+    .function = {0},
+  };
+  ValueOverload *result = NEW(ValueOverload,1);
+  *result = (const ValueOverload) {
+    .descriptor = descriptor,
+    .operand = imm64(fn),
+  };
 
+  result->descriptor->function.return_value = C_function_return_value(forward_declaration);
+  char *ch = strchr(forward_declaration, '(');
+  redassert(ch);
+  ch++;
+
+  char *start = ch;
+  Descriptor *argument_descriptor = 0;
+  for (; *ch; ++ch) {
+    if (*ch == ',' || *ch == ')') {
+      if (start != ch) {
+        argument_descriptor = C_parse_type(start, ch);
+        redassert(argument_descriptor);
+      }
+      start = ch + 1;
+    }
+  }
+
+  if (argument_descriptor && argument_descriptor->type != DescriptorType_Void) {
+    ValueOverload *arg = NEW(ValueOverload, 1);
+    arg->descriptor = argument_descriptor;
+    // FIXME should not use a hardcoded register here
+    arg->operand = reg.rcx;
+
+    result->descriptor->function.arg_list = arg;
+    result->descriptor->function.arg_count = 1;
+  }
+
+  return single_overload_value(result);
+}
 typedef enum InstructionExtensionType
 {
     IET_None,
@@ -1607,7 +1590,15 @@ const InstructionEncoding lss_encoding[] = { 0 };
 const InstructionEncoding les_encoding[] = { 0 };
 const InstructionEncoding lfs_encoding[] = { 0 };
 const InstructionEncoding lgs_encoding[] = { 0 };
-const InstructionEncoding lea_encoding[] = { 0 };
+const InstructionEncoding lea_encoding[] =
+{
+    ENCODING(OP_CODE(0x8D), ENC_OPTS(0),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16), OP(OET_Memory, 64))),
+        OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32), OP(OET_Memory, 64))),
+        OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Memory, 64))),
+    ),
+
+};
 const InstructionEncoding leave_encoding[] = { 0 };
 const InstructionEncoding lfence_encoding[] = { 0 };
 const InstructionEncoding lgdt_encoding[] = { 0 };
@@ -2189,6 +2180,7 @@ define_mnemonic(jpo);
 define_mnemonic(js);
 define_mnemonic(jz);
 
+define_mnemonic(lea);
 define_mnemonic(mul);
 define_mnemonic(mov);
 define_mnemonic(pop);
@@ -2254,9 +2246,17 @@ bool find_encoding(Instruction instruction, u32* encoding_index, u32* combinatio
                         {
                             continue;
                         }
+                        if (operand_encoding.type == OET_Memory)
+                        {
+                            continue;
+                        }
                         break;
                     case OperandType_Relative:
                         if (operand_encoding.type == OET_Relative && operand_encoding.size == operand.size)
+                        {
+                            continue;
+                        }
+                        if (operand_encoding.type == OET_Memory)
                         {
                             continue;
                         }
@@ -2348,6 +2348,14 @@ bool typecheck(const Descriptor* a, const Descriptor* b)
         case DescriptorType_FixedSizeArray:
             return typecheck(a->fixed_size_array.data, b->fixed_size_array.data) && a->fixed_size_array.len == b->fixed_size_array.len;
         case DescriptorType_Pointer:
+            if (a->pointer_to->type == DescriptorType_FixedSizeArray && typecheck(a->pointer_to->fixed_size_array.data, b->pointer_to))
+            {
+                return true;
+            }
+            if (b->pointer_to->type == DescriptorType_FixedSizeArray && typecheck(b->pointer_to->fixed_size_array.data, a->pointer_to))
+            {
+                return true;
+            }
             return typecheck(a->pointer_to, b->pointer_to);
         case DescriptorType_Struct: case DescriptorType_TaggedUnion:
             return a == b;
@@ -2419,6 +2427,7 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
     u32 operand_count = array_length(combination.operands);
 
     u8 rex_byte = combination.rex_byte;
+    bool memory_encoding = false;
 
     bool r_m_encoding = false;
     for (u32 i = 0; i < array_length(instruction.operands); i++)
@@ -2439,6 +2448,10 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
         else if (op_encoding.type == OET_Register_Or_Memory)
         {
             r_m_encoding = true;
+        }
+        else if (op_encoding.type == OET_Memory)
+        {
+            memory_encoding = true;
         }
     }
 
@@ -2464,7 +2477,7 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
     u8 sib_byte = 0;
     bool is_digit = encoding.options.type == Digit;
     bool is_reg = encoding.options.type == Reg;
-    bool need_mod_rm = is_digit || is_reg || r_m_encoding;
+    bool need_mod_rm = is_digit || is_reg || r_m_encoding || memory_encoding;
 
     u64 offset_of_displacement = 0;
     u32 stack_size = 0;
@@ -4095,9 +4108,52 @@ void test_tagged_unions(void)
     redassert(with_default(&test_some, 42) == 21);
 }
 
+Value* value_pointer_to(FunctionBuilder* fn_builder, Value* value)
+{
+    ValueOverload* overload = get_if_single_overload(value);
+    redassert(overload);
+
+    // TODO: support registers
+    // TODO: support immediates
+    redassert(overload->operand.type == OperandType_MemoryIndirect || overload->operand.type == OperandType_RIP_Relative);
+    Descriptor* result_descriptor = descriptor_pointer_to(overload->descriptor);
+    ValueOverload* reg_a = reg_value(Register_A, result_descriptor);
+    encode(fn_builder, (Instruction) {
+        lea, {reg_a->operand, overload->operand}
+    });
+    ValueOverload* result = stack_reserve(fn_builder, result_descriptor);
+    move_value(fn_builder, result, reg_a);
+
+    return single_overload_value(result);
+}
+
+void test_hello_world_lea(void)
+{
+    Value* puts_value = C_function_value("int puts(const char*)", (u64)puts);
+    
+    Descriptor message_descriptor = {
+        .type = DescriptorType_FixedSizeArray,
+        .fixed_size_array = {
+            .data = &descriptor_s8,
+            .len = 4,
+         }
+    };
+
+    u8 hi[] = { 'H', 'i', '!', 0 };
+    s32 hi_s32 = *(s32*)hi;
+    Function(hello_world)
+    {
+        ValueOverload* message_overload = stack_reserve(&fn_builder, &message_descriptor);
+        move_value(&fn_builder, message_overload, get_if_single_overload(s32_value(hi_s32)));
+        Call(puts_value, value_pointer_to(&fn_builder, single_overload_value(message_overload)));
+    }
+    typedef void RetVoidParamVoid(void);
+    value_as_function(hello_world, RetVoidParamVoid)();
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    test_tagged_unions();
+    test_hello_world_lea();
 }
 
 s32 main(s32 argc, char* argv[])
