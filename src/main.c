@@ -222,13 +222,14 @@ typedef enum DescriptorType
 } DescriptorType;
 
 typedef struct Value Value;
-typedef struct ValueOverload ValueOverload;
+typedef struct DescriptorFunction DescriptorFunction;
 typedef struct DescriptorFunction
 {
-    ValueOverload* arg_list;
+    Value* arg_list;
     s64 arg_count;
-    ValueOverload* return_value;
+    Value* return_value;
     bool frozen;
+    Value* next_overload;
 } DescriptorFunction;
 
 typedef struct DescriptorFixedSizeArray
@@ -379,31 +380,14 @@ Descriptor* descriptor_array_of(const Descriptor* descriptor, s64 len)
     return result;
 }
 
-typedef struct ValueOverload
+typedef struct Value
 {
     Descriptor* descriptor;
     Operand operand;
-} ValueOverload;
-
-typedef struct Value
-{
-    // @Overrloads should be a pointer
-    ValueOverload** overload_list;
-    s64 overload_count;
 } Value;
 
 
-ValueOverload* get_if_single_overload(const Value* value)
-{
-    if (value->overload_count == 1)
-    {
-        return value->overload_list[0];
-    }
-
-    return NULL;
-}
-
-void assert_not_register(ValueOverload* overload, Register r)
+void assert_not_register(Value* overload, Register r)
 {
     redassert(overload);
     if (overload->operand.type == OperandType_Register)
@@ -436,18 +420,9 @@ Descriptor descriptor_struct_reflection = {
 };
 
 
-ValueOverload void_value_overload = {
+Value void_value = {
     .descriptor = &descriptor_void,
 };
-
-ValueOverload* void_value_overload_ptr = &void_value_overload;
-Value void_value_v =
-{
-    .overload_count = 1,
-    .overload_list = &void_value_overload_ptr,
-};
-
-Value* void_value = &void_value_v;
 
 #define reg_init(reg_index, reg_size) { .type = OperandType_Register, .size = reg_size, .reg = reg_index, }
 #define define_register(reg_name, reg_index, reg_size)\
@@ -717,19 +692,7 @@ static inline Operand get_reg(OperandSize reg_size, Register reg_index)
     return reg.arr[register_size_jump_table[reg_size]][reg_index];
 }
 
-Value* single_overload_value(ValueOverload* overload)
-{
-    Value* result = NEW(Value, 1);
-    ValueOverload** overload_list = NEW(ValueOverload*, 1);
-    overload_list[0] = overload;
-    *result = (const Value){
-         .overload_list = overload_list, .overload_count = 1
-    };
-
-    return result;
-}
-
-static inline ValueOverload* reg_value(Register reg, const Descriptor* descriptor)
+static inline Value* reg_value(Register reg, const Descriptor* descriptor)
 {
     s64 size = descriptor_size(descriptor);
     redassert(
@@ -739,8 +702,8 @@ static inline ValueOverload* reg_value(Register reg, const Descriptor* descripto
         size == sizeof(s64)
     );
 
-    ValueOverload* result = NEW(ValueOverload, 1);
-    *result = (ValueOverload){
+    Value* result = NEW(Value, 1);
+    *result = (Value){
         .descriptor = (Descriptor*)descriptor,
         .operand = get_reg(size, reg),
     };
@@ -750,44 +713,27 @@ static inline ValueOverload* reg_value(Register reg, const Descriptor* descripto
 
 static inline Value* s32_value(s32 v)
 {
-    ValueOverload* result = NEW(ValueOverload, 1);
-    *result = (ValueOverload) {
+    Value* result = NEW(Value, 1);
+    *result = (Value) {
         .descriptor = (Descriptor*)&descriptor_s32,
         .operand = imm32(v),
     };
-    return single_overload_value(result);
+    return (result);
 }
 static inline Value* s64_value(s64 v)
 {
-    ValueOverload* result = NEW(ValueOverload, 1);
-    *result = (ValueOverload) {
+    Value* result = NEW(Value, 1);
+    *result = (Value) {
         .descriptor = (Descriptor*)&descriptor_s64,
         .operand = imm64(v),
     };
-    return single_overload_value(result);
+    return (result);
 }
 
 
 Value* value_size(Value* value)
 {
-    s32 size = 0;
-    for (s32 i = 0; i < value->overload_count; i++)
-    {
-        ValueOverload* overload = value->overload_list[i];
-        s32 overload_size = (s32)descriptor_size(overload->descriptor);
-
-        if (i == 0)
-        {
-            size = (s32)descriptor_size(overload->descriptor);
-        }
-        else
-        {
-            redassert(size == overload_size);
-        }
-    }
-
-    redassert(size);
-    return s64_value(size);
+    return s64_value(descriptor_size(value->descriptor));
 }
 
 bool memory_range_equal_to_c_string(const void* range_start, const void* range_end, const char* string)
@@ -808,11 +754,11 @@ Descriptor * C_parse_type(
     if (!(*ch == ' ' || *ch == '*' || ch == range_end)) continue;
     if (start != ch) {
       if (memory_range_equal_to_c_string(start, ch, "char")) {
-        descriptor = &descriptor_s8;
+        descriptor = (Descriptor*)&descriptor_s8;
       } else if (memory_range_equal_to_c_string(start, ch, "int")) {
-        descriptor = &descriptor_s32;
+        descriptor = (Descriptor*)&descriptor_s32;
       } else if (memory_range_equal_to_c_string(start, ch, "void")) {
-        descriptor = &descriptor_void;
+        descriptor = (Descriptor*)&descriptor_void;
       } else if (memory_range_equal_to_c_string(start, ch, "const")) {
         // TODO support const values?
       } else {
@@ -833,92 +779,89 @@ Descriptor * C_parse_type(
   return descriptor;
 }
 
-ValueOverload* C_function_return_value( const char *forward_declaration) {
-  char *ch = strchr(forward_declaration, '(');
-  redassert(ch);
-  --ch;
+Value* C_function_return_value( const char *forward_declaration) {
+    char *ch = strchr(forward_declaration, '(');
+    redassert(ch);
+    --ch;
 
-  // skip whitespace before (
-  for(; *ch == ' '; --ch);
-  for(;
-    (*ch >= 'a' && *ch <= 'z') ||
-    (*ch >= 'A' && *ch <= 'Z') ||
-    (*ch >= '0' && *ch <= '9') ||
-    *ch == '_';
-    --ch
-  )
-  // skip whitespace before function name
-  for(; *ch == ' '; --ch);
-  ++ch;
-  Descriptor *descriptor = C_parse_type(forward_declaration, ch);
-  redassert(descriptor);
-  switch(descriptor->type) {
-    case DescriptorType_Void: {
-      return &void_value_overload;
-    }
-    case DescriptorType_Function:
-    case DescriptorType_Integer:
-    case DescriptorType_Pointer: {
-      ValueOverload *return_value = NEW(ValueOverload, 1);
-      *return_value = (const ValueOverload) {
-        .descriptor = descriptor,
-        .operand = reg.eax,
-      };
-      return return_value;
-    }
-    case DescriptorType_TaggedUnion:
-    case DescriptorType_FixedSizeArray:
-    case DescriptorType_Struct:
-    default: {
-      redassert(!"Unsupported return type");
-    }
-  }
-  return 0;
-}
-Value *
-C_function_value(
-  const char *forward_declaration,
-  u64 fn
-) {
-  Descriptor *descriptor = NEW(Descriptor, 1);
-  *descriptor = (const Descriptor) {
-    .type = DescriptorType_Function,
-    .function = {0},
-  };
-  ValueOverload *result = NEW(ValueOverload,1);
-  *result = (const ValueOverload) {
-    .descriptor = descriptor,
-    .operand = imm64(fn),
-  };
-
-  result->descriptor->function.return_value = C_function_return_value(forward_declaration);
-  char *ch = strchr(forward_declaration, '(');
-  redassert(ch);
-  ch++;
-
-  char *start = ch;
-  Descriptor *argument_descriptor = 0;
-  for (; *ch; ++ch) {
-    if (*ch == ',' || *ch == ')') {
-      if (start != ch) {
-        argument_descriptor = C_parse_type(start, ch);
-        redassert(argument_descriptor);
+    // skip whitespace before (
+    for(; *ch == ' '; --ch);
+    for(;
+      (*ch >= 'a' && *ch <= 'z') ||
+      (*ch >= 'A' && *ch <= 'Z') ||
+      (*ch >= '0' && *ch <= '9') ||
+      *ch == '_';
+      --ch
+    )
+    // skip whitespace before function name
+    for(; *ch == ' '; --ch);
+    ++ch;
+    Descriptor *descriptor = C_parse_type(forward_declaration, ch);
+    redassert(descriptor);
+    switch(descriptor->type) {
+      case DescriptorType_Void: {
+        return &void_value;
       }
-      start = ch + 1;
+      case DescriptorType_Function:
+      case DescriptorType_Integer:
+      case DescriptorType_Pointer: {
+        Value *return_value = NEW(Value, 1);
+        *return_value = (const Value) {
+          .descriptor = descriptor,
+          .operand = reg.eax,
+        };
+        return return_value;
+      }
+      case DescriptorType_TaggedUnion:
+      case DescriptorType_FixedSizeArray:
+      case DescriptorType_Struct:
+      default: {
+        redassert(!"Unsupported return type");
+      }
     }
-  }
+    return 0;
+}
 
-  if (argument_descriptor && argument_descriptor->type != DescriptorType_Void) {
-    ValueOverload *arg = NEW(ValueOverload, 1);
-    arg->descriptor = argument_descriptor;
-    // FIXME should not use a hardcoded register here
-    arg->operand = reg.rcx;
+Value* C_function_value(const char* forward_declaration, u64 fn) {
+    Descriptor* descriptor = NEW(Descriptor, 1);
+    *descriptor = (const Descriptor){
+      .type = DescriptorType_Function,
+      .function = {0},
+    };
+    Value* result = NEW(Value, 1);
+    *result = (const Value){
+      .descriptor = descriptor,
+      .operand = imm64(fn),
+    };
 
-    result->descriptor->function.arg_list = arg;
-    result->descriptor->function.arg_count = 1;
-  }
+    result->descriptor->function.return_value = C_function_return_value(forward_declaration);
+    char* ch = strchr(forward_declaration, '(');
+    redassert(ch);
+    ch++;
 
-  return single_overload_value(result);
+    char* start = ch;
+    Descriptor* argument_descriptor = 0;
+    for (; *ch; ++ch) {
+        if (*ch == ',' || *ch == ')') {
+            if (start != ch) {
+                argument_descriptor = C_parse_type(start, ch);
+                redassert(argument_descriptor);
+            }
+            start = ch + 1;
+        }
+    }
+
+    if (argument_descriptor && argument_descriptor->type != DescriptorType_Void) {
+        Value* arg = NEW(Value, 1);
+        arg->descriptor = argument_descriptor;
+        // FIXME should not use a hardcoded register here
+        arg->operand = reg.rcx;
+
+        result->descriptor->function.arg_list = arg;
+        result->descriptor->function.arg_count = 1;
+    }
+
+    return (result);
 }
 typedef enum InstructionExtensionType
 {
@@ -2365,30 +2308,14 @@ bool typecheck(const Descriptor* a, const Descriptor* b)
     }
 }
 
-bool typecheck_overloads(ValueOverload* a, ValueOverload* b)
+bool typecheck_values(Value* a, Value* b)
 {
     redassert(a);
     redassert(b);
     return typecheck(a->descriptor, b->descriptor);
 }
 
-bool typecheck_values(Value* a, Value* b)
-{
-    // @TODO: fix this shit
-    ValueOverload* a_overload = get_if_single_overload(a);
-    ValueOverload* b_overload = get_if_single_overload(b);
-    redassert(a_overload);
-    redassert(b_overload);
-
-    return typecheck(a_overload->descriptor, b_overload->descriptor);
-}
-
-typedef struct ValueOverloadPair
-{
-    ValueOverload* a;
-    ValueOverload* b;
-} ValueOverloadPair;
-
+#if 0
 ValueOverloadPair* get_matching_values(Value* a, Value* b)
 {
     for (u32 a_index = 0; a_index < a->overload_count; ++a_index)
@@ -2397,7 +2324,7 @@ ValueOverloadPair* get_matching_values(Value* a, Value* b)
         for (u32 b_index = 0; b_index < b->overload_count; ++b_index)
         {
             ValueOverload* b_overload = b->overload_list[b_index];
-            if (typecheck_overloads(a_overload, b_overload))
+            if (typecheck_values(a_overload, b_overload))
             {
                 ValueOverloadPair* result = NEW(ValueOverloadPair, 1);
                 *result = (const ValueOverloadPair) {
@@ -2411,6 +2338,7 @@ ValueOverloadPair* get_matching_values(Value* a, Value* b)
 
     return NULL;
 }
+#endif
 
 void encode(FunctionBuilder* fn_builder, Instruction instruction)
 {
@@ -2706,8 +2634,8 @@ Value* _id_ = fn_arg(&fn_builder, (_descriptor_))
 #define CONCAT_HELPER(A, B) A##B
 #define CONCAT(A, B) CONCAT_HELPER(A, B)
 #define Stack(_id_, _descriptor_, _value_)\
-Value* _id_ = single_overload_value(stack_reserve(&fn_builder, (_descriptor_))); \
-move_value(&fn_builder, get_if_single_overload(_id_), (_value_))
+Value* _id_ = (stack_reserve(&fn_builder, (_descriptor_))); \
+move_value(&fn_builder, (_id_), (_value_))
 
 #define Stack_s8(_id_ , _value_) Stack((_id_), &descriptor_s8 , (_value_))
 #define Stack_s16(_id_, _value_) Stack((_id_), &descriptor_s16, (_value_))
@@ -2781,7 +2709,7 @@ void test_main(s32 argc, char* argv[])
     TEST(&eb, push_r9, INSTR(push, { reg.r9 }), EXPECTED(0x41, 0x51)));
 }
 
-ValueOverload* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
+Value* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* descriptor)
 {
     s32 size = (s32)descriptor_size(descriptor);
     Operand reserved;
@@ -2799,8 +2727,8 @@ ValueOverload* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* desc
             break;
     }
 
-    ValueOverload* result = NEW(ValueOverload, 1);
-    *result = (ValueOverload) {
+    Value* result = NEW(Value, 1);
+    *result = (Value) {
         .descriptor = (Descriptor*)descriptor,
         .operand = reserved,
     }; 
@@ -2808,7 +2736,7 @@ ValueOverload* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* desc
     return (result);
 }
 
-void move_value(FunctionBuilder* fn_builder, const ValueOverload* a, const ValueOverload* b)
+void move_value(FunctionBuilder* fn_builder, const Value* a, const Value* b)
 {
     s64 a_size = descriptor_size(a->descriptor);
     s64 b_size = descriptor_size(b->descriptor);
@@ -2824,7 +2752,7 @@ void move_value(FunctionBuilder* fn_builder, const ValueOverload* a, const Value
     if ((b_size == OperandSize_64 && b->operand.type == OperandType_Immediate && a->operand.type != OperandType_Register) || (a->operand.type == OperandType_MemoryIndirect && b->operand.type == OperandType_MemoryIndirect))
     {
         // @TODO: This could be a problem if RAX is used as a temporary value
-        ValueOverload* reg_a = reg_value(Register_A, a->descriptor);
+        Value* reg_a = reg_value(Register_A, a->descriptor);
         encode(fn_builder, (Instruction) { mov, { reg_a->operand, b->operand } });
         encode(fn_builder, (Instruction) { mov, { a->operand, reg_a->operand } });
     }
@@ -2891,11 +2819,11 @@ void resolve_jump_patch_list(FunctionBuilder* fn_builder, JumpPatchList* list)
 
 Value* fn_reflect(FunctionBuilder* fn_builder, Descriptor* descriptor)
 {
-    ValueOverload* result = stack_reserve(fn_builder, &descriptor_struct_reflection);
+    Value* result = stack_reserve(fn_builder, &descriptor_struct_reflection);
     redassert(descriptor->type == DescriptorType_Struct);
-    move_value(fn_builder, result, get_if_single_overload(s64_value(descriptor->struct_.field_count)));
+    move_value(fn_builder, result, (s64_value(descriptor->struct_.field_count)));
 
-    return single_overload_value(result);
+    return (result);
 }
 
 FunctionBuilder fn_begin(Value** result, ExecutionBuffer* eb)
@@ -2905,7 +2833,7 @@ FunctionBuilder fn_begin(Value** result, ExecutionBuffer* eb)
     {
         .type = DescriptorType_Function,
         .function = {
-            .arg_list = NEW(ValueOverload, 16),
+            .arg_list = NEW(Value, 16),
         }
     };
     FunctionBuilder fn_builder =
@@ -2918,14 +2846,14 @@ FunctionBuilder fn_begin(Value** result, ExecutionBuffer* eb)
     *(fn_builder.eb) = give_me(1024);
     fn_builder.code = eb->ptr + eb->len;
     
-    ValueOverload* fn_value = NEW(ValueOverload, 1);
-    *fn_value = (const ValueOverload)
+    Value* fn_value = NEW(Value, 1);
+    *fn_value = (const Value)
     {
         .descriptor = descriptor,
         .operand = imm64((u64)fn_builder.code),
     };
 
-    *result = single_overload_value(fn_value);
+    *result = (fn_value);
 
     // @Volatile @ArgCount
 
@@ -2946,20 +2874,10 @@ FunctionBuilder fn_begin(Value** result, ExecutionBuffer* eb)
     return fn_builder;
 }
 
-ValueOverload* fn_get_overload(FunctionBuilder* fn_builder)
-{
-    Value* fn = (*fn_builder->result);
-    redassert(fn->overload_count == 1);
-    ValueOverload* overload = get_if_single_overload(fn);
-    redassert(overload);
-    return overload;
-}
-
 Descriptor* fn_update_result(FunctionBuilder* fn_builder)
 {
     fn_builder->descriptor->function.arg_count = fn_builder->next_arg;
-    ValueOverload* overload = fn_get_overload(fn_builder);
-    return overload->descriptor;
+    return (*fn_builder->result)->descriptor;
 }
 
 void fn_ensure_frozen(DescriptorFunction* function)
@@ -2970,21 +2888,19 @@ void fn_ensure_frozen(DescriptorFunction* function)
     }
     if (!function->return_value)
     {
-        function->return_value = &void_value_overload;
+        function->return_value = &void_value;
     }
     function->frozen = true;
 }
 
 void fn_freeze(FunctionBuilder* fn_builder)
 {
-    ValueOverload* overload = fn_get_overload(fn_builder);
-    fn_ensure_frozen(&overload->descriptor->function);
+    fn_ensure_frozen(&fn_builder->descriptor->function);
 }
 
 bool fn_is_frozen(FunctionBuilder* fn_builder)
 {
-    ValueOverload* overload = fn_get_overload(fn_builder);
-    return overload->descriptor->function.frozen;
+    return fn_builder->descriptor->function.frozen;
 }
 
 void fn_end(FunctionBuilder* fn_builder)
@@ -3059,7 +2975,7 @@ Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
                 s64 arg_size = descriptor_size(arg_descriptor);
                 s64 offset = arg_index * 8;
 
-                function->arg_list[arg_index] = (const ValueOverload){
+                function->arg_list[arg_index] = (const Value){
                     .descriptor = (Descriptor*)arg_descriptor,
                     .operand = stack((s32)offset, (s32)arg_size),
                 };
@@ -3073,14 +2989,14 @@ Value* fn_arg(FunctionBuilder* fn_builder, const Descriptor* arg_descriptor)
 
     fn_update_result(fn_builder);
 
-    return single_overload_value(&function->arg_list[arg_index]);
+    return (&function->arg_list[arg_index]);
 };
 
-void fn_return(FunctionBuilder* fn_builder, const Value* to_return)
+void fn_return(FunctionBuilder* fn_builder, Value* to_return)
 {
     // TODO: @ChooseOverload @Overloads
 
-    ValueOverload* overload = get_if_single_overload(to_return);
+    Value* overload = (to_return);
     redassert(overload);
     DescriptorFunction* function = &fn_builder->descriptor->function;
     if (function->return_value)
@@ -3097,7 +3013,7 @@ void fn_return(FunctionBuilder* fn_builder, const Value* to_return)
         }
         else
         {
-            function->return_value = &void_value_overload;
+            function->return_value = &void_value;
         }
     }
 
@@ -3114,34 +3030,31 @@ typedef s32 s32_s32(s32);
 typedef s64 (fn_type_void_to_s64)(void);
 u64 helper_value_as_function(Value* value)
 {
-    ValueOverload* overload = get_if_single_overload(value);
-    redassert(overload);
-    redassert(overload->operand.type == OperandType_Immediate && overload->operand.size == OperandSize_64);
-    return overload->operand.imm._64;
+    redassert(value);
+    redassert(value->operand.type == OperandType_Immediate && value->operand.size == OperandSize_64);
+    return value->operand.imm._64;
 }
 
 Value* value_pointer_to(FunctionBuilder* fn_builder, Value* value)
 {
-    ValueOverload* overload = get_if_single_overload(value);
-    redassert(overload);
 
     // TODO: support registers
     // TODO: support immediates
-    redassert(overload->operand.type == OperandType_MemoryIndirect || overload->operand.type == OperandType_RIP_Relative);
-    Descriptor* result_descriptor = descriptor_pointer_to(overload->descriptor);
-    ValueOverload* reg_a = reg_value(Register_A, result_descriptor);
+    redassert(value->operand.type == OperandType_MemoryIndirect || value->operand.type == OperandType_RIP_Relative);
+    Descriptor* result_descriptor = descriptor_pointer_to(value->descriptor);
+    Value* reg_a = reg_value(Register_A, result_descriptor);
     encode(fn_builder, (Instruction) {
-        lea, {reg_a->operand, overload->operand}
+        lea, {reg_a->operand, value->operand}
     });
-    ValueOverload* result = stack_reserve(fn_builder, result_descriptor);
+    Value* result = stack_reserve(fn_builder, result_descriptor);
     move_value(fn_builder, result, reg_a);
 
-    return single_overload_value(result);
+    return (result);
 }
 
 #define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
 
-Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, ValueOverload** arg_list, s64 arg_count)
+Value* call_function_overload(FunctionBuilder* fn_builder, Value* fn, Value** arg_list, s64 arg_count)
 {
     DescriptorFunction* descriptor = &fn->descriptor->function;
     redassert(fn->descriptor->type == DescriptorType_Function);
@@ -3151,7 +3064,7 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
 
     for (s64 i = 0; i < arg_count; i++)
     {
-        redassert(typecheck_overloads(&descriptor->arg_list[i], arg_list[i]));
+        redassert(typecheck_values(&descriptor->arg_list[i], arg_list[i]));
         move_value(fn_builder, &descriptor->arg_list[i], arg_list[i]);
     }
 
@@ -3163,7 +3076,7 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
     {
         parameter_stack_size += return_size;
         Descriptor* return_pointer_descriptor = descriptor_pointer_to(descriptor->return_value->descriptor);
-        ValueOverload* reg_c = reg_value(Register_C, return_pointer_descriptor);
+        Value* reg_c = reg_value(Register_C, return_pointer_descriptor);
         encode(fn_builder, (Instruction) { lea, { reg_c->operand, descriptor->return_value->operand } });
     }
 
@@ -3186,41 +3099,35 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
     }
     else
     {
-        ValueOverload* reg_a = reg_value(Register_A, fn->descriptor);
+        Value* reg_a = reg_value(Register_A, fn->descriptor);
         move_value(fn_builder, reg_a, fn);
         encode(fn_builder, (Instruction) { call, { reg_a->operand } });
     }
 
     if (return_size <= 8)
     {
-        ValueOverload* result = stack_reserve(fn_builder, descriptor->return_value->descriptor);
+        Value* result = stack_reserve(fn_builder, descriptor->return_value->descriptor);
         move_value(fn_builder, result, descriptor->return_value);
-        return single_overload_value(result);
+        return (result);
     }
 
-    return single_overload_value(descriptor->return_value);
+    return (descriptor->return_value);
 }
 
 Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value** arg_list, s64 arg_count)
 {
-    ValueOverload** arg_overload_list = NEW(ValueOverload*, arg_count);
-
-    for (s64 overload_index = 0; overload_index < fn->overload_count; overload_index++)
+    redassert(fn);
+    for (Value* fn_overload = fn; fn_overload; fn_overload = fn_overload->descriptor->function.next_overload)
     {
-        ValueOverload* overload = fn->overload_list[overload_index];
-        redassert(overload->descriptor->type == DescriptorType_Function);
-        DescriptorFunction* descriptor = &overload->descriptor->function;
-
+        DescriptorFunction* descriptor = &fn->descriptor->function;
         bool match = true;
 
         for (s64 arg_index = 0; arg_index < arg_count; arg_index++)
         {
             // TODO: @Overloads
-            ValueOverload* arg_overload = get_if_single_overload(arg_list[arg_index]);
-            redassert(arg_overload);
-            arg_overload_list[arg_index] = arg_overload;
+            Value* arg_value = arg_list[arg_index];
 
-            if (!typecheck_overloads(&descriptor->arg_list[arg_index], arg_overload))
+            if (!typecheck_values(&descriptor->arg_list[arg_index], arg_value))
             {
                 match = false;
                 break;
@@ -3228,9 +3135,10 @@ Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value** arg_l
         }
         if (match)
         {
-            return call_function_overload(fn_builder, overload, arg_overload_list, arg_count);
+            return call_function_overload(fn_builder, fn_overload, arg_list, arg_count);
         }
     }
+
     redassert(!"No matching overload found");
     return NULL;
 }
@@ -3238,9 +3146,7 @@ Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value** arg_l
 
 LabelPatch32 make_if(FunctionBuilder* fn_builder, Value* conditional)
 {
-    ValueOverload* overload = get_if_single_overload(conditional);
-    redassert(overload);
-    encode(fn_builder, (Instruction) { cmp, { overload->operand, imm32(0)}});
+    encode(fn_builder, (Instruction) { cmp, { conditional->operand, imm32(0)}});
 
     return make_jz(fn_builder);
 }
@@ -3334,7 +3240,7 @@ Descriptor* struct_end(StructBuilder* struct_builder)
     return result;
 }
 
-ValueOverload* ensure_memory(ValueOverload* overload)
+Value* ensure_memory(Value* overload)
 {
     Operand operand = overload->operand;
     if (operand.type == OperandType_MemoryIndirect)
@@ -3342,13 +3248,13 @@ ValueOverload* ensure_memory(ValueOverload* overload)
         return overload;
     }
     
-    ValueOverload* result = NEW(ValueOverload, 1);
+    Value* result = NEW(Value, 1);
     if (overload->descriptor->type != DescriptorType_Pointer)
         redassert(!"Not implemented");
     if (overload->operand.type != OperandType_Register)
         redassert(!"Not implemented");
 
-    *result = (const ValueOverload){
+    *result = (const Value){
         .descriptor = overload->descriptor->pointer_to,
         .operand = {
             .type = OperandType_MemoryIndirect,
@@ -3365,9 +3271,7 @@ ValueOverload* ensure_memory(ValueOverload* overload)
 
 Value* struct_get_field(Value* struct_value, const char* name)
 {
-    ValueOverload* raw_overload = get_if_single_overload(struct_value);
-    redassert(raw_overload);
-    ValueOverload* struct_overload = ensure_memory(raw_overload);
+    Value* struct_overload = ensure_memory(struct_value);
     Descriptor* descriptor = struct_overload->descriptor;
     redassert(descriptor->type == DescriptorType_Struct);
 
@@ -3376,17 +3280,17 @@ Value* struct_get_field(Value* struct_value, const char* name)
         DescriptorStructField* field = &descriptor->struct_.field_list[i];
         if (strcmp(field->name, name) == 0)
         {
-            ValueOverload* result = NEW(ValueOverload, 1);
+            Value* result = NEW(Value, 1);
             // support more operands
             //redassert(overload->descriptor->type == OperandType_MemoryIndirect);
             Operand operand = struct_overload->operand;
             operand.indirect.displacement += (s32)field->offset;
-            *result = (const ValueOverload){
+            *result = (const Value){
                 .descriptor = (Descriptor*)field->descriptor,
                 .operand = operand,
             };
 
-            return single_overload_value(result);
+            return (result);
         }
     }
 
@@ -3401,25 +3305,21 @@ typedef enum CompareOp
     Cmp_Greater,
 } CompareOp;
 
-Value* compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value* a, Value* b)
+Value* compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value* a_overload, Value* b_overload)
 {
-    ValueOverload* a_overload = get_if_single_overload(a);
-    redassert(a_overload);
-    ValueOverload* b_overload = get_if_single_overload(b);
-    redassert(b_overload);
-    redassert(typecheck_overloads(a_overload, b_overload));
+    redassert(typecheck_values(a_overload, b_overload));
 
-    ValueOverload* temp_b = stack_reserve(fn_builder, b_overload->descriptor);
+    Value* temp_b = stack_reserve(fn_builder, b_overload->descriptor);
     move_value(fn_builder, temp_b, b_overload);
 
-    ValueOverload* reg_a = reg_value(Register_A, a_overload->descriptor);
+    Value* reg_a = reg_value(Register_A, a_overload->descriptor);
     move_value(fn_builder, reg_a, a_overload);
 
     encode(fn_builder, (Instruction) { cmp, { reg_a->operand, temp_b->operand } });
 
     // @TODO: use xor
     reg_a = reg_value(Register_A, &descriptor_s64);
-    move_value(fn_builder, reg_a, get_if_single_overload(s64_value(0)));
+    move_value(fn_builder, reg_a, s64_value(0));
 
     switch (compare_op)
     {
@@ -3437,10 +3337,10 @@ Value* compare(FunctionBuilder* fn_builder, CompareOp compare_op, Value* a, Valu
             break;
     }
 
-    ValueOverload* result = stack_reserve(fn_builder, (Descriptor*)&descriptor_s64);
+    Value* result = stack_reserve(fn_builder, (Descriptor*)&descriptor_s64);
     move_value(fn_builder, result, reg_a);
 
-    return single_overload_value(result);
+    return (result);
 }
 
 #if 0
@@ -3528,58 +3428,50 @@ void print_fn(void)
 
 #endif
 
-Value* rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic arithmetic_instruction, ValueOverload* a, ValueOverload* b)
+Value* rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic arithmetic_instruction, Value* a, Value* b)
 {
     if (!(a->descriptor->type == DescriptorType_Pointer && b->descriptor->type == DescriptorType_Integer && b->descriptor->integer.size == 8))
     {
-        redassert(typecheck_overloads(a, b));
+        redassert(typecheck_values(a, b));
         redassert(a->descriptor->type == DescriptorType_Integer);
     }
     assert_not_register(a, Register_A);
     assert_not_register(b, Register_A);
 
-    ValueOverload* temp_b = stack_reserve(fn_builder, b->descriptor);
+    Value* temp_b = stack_reserve(fn_builder, b->descriptor);
     move_value(fn_builder, temp_b, b);
-    ValueOverload* reg_a = reg_value(Register_A, a->descriptor);
+    Value* reg_a = reg_value(Register_A, a->descriptor);
     move_value(fn_builder, reg_a, a);
 
     encode(fn_builder, (Instruction) { arithmetic_instruction, {reg_a->operand, temp_b->operand }} );
 
-    ValueOverload* temporary_value = stack_reserve(fn_builder, a->descriptor);
+    Value* temporary_value = stack_reserve(fn_builder, a->descriptor);
     move_value(fn_builder, temporary_value, reg_a);
 
-    return single_overload_value(temporary_value);
+    return (temporary_value);
 }
 
 static inline Value* rns_add(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    ValueOverload* overload_a = get_if_single_overload(a);
-    ValueOverload* overload_b = get_if_single_overload(b);
-    return rns_arithmetic(fn_builder, add, overload_a, overload_b);
+    return rns_arithmetic(fn_builder, add, a, b);
 }
 
 static inline Value* rns_sub(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    ValueOverload* overload_a = get_if_single_overload(a);
-    ValueOverload* overload_b = get_if_single_overload(b);
-    return rns_arithmetic(fn_builder, sub, overload_a, overload_b);
+    return rns_arithmetic(fn_builder, sub, a, b);
 }
 
-Value* rns_signed_mul_immediate(FunctionBuilder* fn_builder, Value* a_value, Value* b_value)
+Value* rns_signed_mul_immediate(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    ValueOverload* a = get_if_single_overload(a_value);
-    redassert(a);
-    ValueOverload* b = get_if_single_overload(b_value);
-    redassert(b);
-    redassert(typecheck_overloads(a, b));
+    redassert(typecheck_values(a, b));
     redassert(a->descriptor->type == DescriptorType_Integer);
 
     assert_not_register(a, Register_A);
     assert_not_register(b, Register_A);
     redassert(b->operand.type == OperandType_Immediate && b->operand.size <= OperandSize_32);
 
-    ValueOverload* reg_a = reg_value(Register_A, b->descriptor);
-    ValueOverload* b_temp = stack_reserve(fn_builder, b->descriptor);
+    Value* reg_a = reg_value(Register_A, b->descriptor);
+    Value* b_temp = stack_reserve(fn_builder, b->descriptor);
     move_value(fn_builder, reg_a, b);
     move_value(fn_builder, b_temp, reg_a);
 
@@ -3588,32 +3480,28 @@ Value* rns_signed_mul_immediate(FunctionBuilder* fn_builder, Value* a_value, Val
 
     encode(fn_builder, (Instruction) { imul, { reg_a->operand, b_temp->operand } });
 
-    ValueOverload* temporary_value = stack_reserve(fn_builder, a->descriptor);
+    Value* temporary_value = stack_reserve(fn_builder, a->descriptor);
     move_value(fn_builder, temporary_value, reg_a);
 
-    return single_overload_value(temporary_value);
+    return (temporary_value);
 }
 
-Value* rns_signed_div(FunctionBuilder* fn_builder, Value* a_value, Value* b_value)
+Value* rns_signed_div(FunctionBuilder* fn_builder, Value* a, Value* b)
 {
-    ValueOverload* a = get_if_single_overload(a_value);
-    redassert(a);
-    ValueOverload* b = get_if_single_overload(b_value);
-    redassert(b);
-    redassert(typecheck_overloads(a, b));
+    redassert(typecheck_values(a, b));
     redassert(a->descriptor->type == DescriptorType_Integer);
     assert_not_register(a, Register_A);
     assert_not_register(b, Register_A);
 
     // Signed division stores the remainder in the D register
-    ValueOverload* rdx_temp = stack_reserve(fn_builder, &descriptor_s64);
-    ValueOverload* reg_rdx = reg_value(Register_D, &descriptor_s64);
+    Value* rdx_temp = stack_reserve(fn_builder, &descriptor_s64);
+    Value* reg_rdx = reg_value(Register_D, &descriptor_s64);
     move_value(fn_builder, rdx_temp, reg_rdx);
 
-    ValueOverload* reg_a = reg_value(Register_A, a->descriptor);
+    Value* reg_a = reg_value(Register_A, a->descriptor);
     move_value(fn_builder, reg_a, a);
 
-    ValueOverload* divisor = stack_reserve(fn_builder, b->descriptor);
+    Value* divisor = stack_reserve(fn_builder, b->descriptor);
     move_value(fn_builder, divisor, b);
     switch (descriptor_size(a->descriptor))
     {
@@ -3632,13 +3520,13 @@ Value* rns_signed_div(FunctionBuilder* fn_builder, Value* a_value, Value* b_valu
 
     encode(fn_builder, (Instruction) { idiv, {divisor->operand}});
 
-    ValueOverload* temporary_value = stack_reserve(fn_builder, a->descriptor);
+    Value* temporary_value = stack_reserve(fn_builder, a->descriptor);
     move_value(fn_builder, temporary_value, reg_a);
 
     // Restore RDX
     move_value(fn_builder, reg_rdx, rdx_temp);
 
-    return single_overload_value(temporary_value);
+    return (temporary_value);
 }
 
 typedef s64 RetS64_ParamS64_S64(s64, s64);
@@ -3724,8 +3612,8 @@ void test_array_loop(void)
     Function(array_increment)
     {
         Arg(arr, &array_pointer_descriptor);
-        Stack_s32(index, get_if_single_overload(s32_value(0)));
-        Stack(temp, get_if_single_overload(arr)->descriptor, get_if_single_overload(arr));
+        Stack_s32(index, (s32_value(0)));
+        Stack(temp, (arr)->descriptor, (arr));
 
         u32 array_elem_size = (u32)descriptor_size(array_pointer_descriptor.pointer_to->fixed_size_array.data);
 
@@ -3737,8 +3625,8 @@ void test_array_loop(void)
                 BREAK;
             }
 
-            ValueOverload* reg_a = reg_value(Register_A, get_if_single_overload(temp)->descriptor);
-            encode(&fn_builder, (Instruction) { mov, { reg.rax, get_if_single_overload(temp)->operand } });
+            Value* reg_a = reg_value(Register_A, (temp)->descriptor);
+            encode(&fn_builder, (Instruction) { mov, { reg.rax, (temp)->operand } });
 
             Operand pointer =
             {
@@ -3751,8 +3639,8 @@ void test_array_loop(void)
             };
 
             encode(&fn_builder, (Instruction) { inc, { pointer } });
-            encode(&fn_builder, (Instruction) { add, { get_if_single_overload(temp)->operand, imm32((u32)array_elem_size) } });
-            encode(&fn_builder, (Instruction) { inc, { get_if_single_overload(index)->operand } });
+            encode(&fn_builder, (Instruction) { add, { (temp)->operand, imm32((u32)array_elem_size) } });
+            encode(&fn_builder, (Instruction) { inc, { (index)->operand } });
         }
     }
     value_as_function(array_increment, RetVoid_Param_P_S32)(arr);
@@ -3777,13 +3665,13 @@ void test_structs(void)
     Function(struct_test)
     {
         Arg(arg0, size_struct_pointer_desc);
-        ValueOverload* arg_overload = get_if_single_overload(arg0);
+        Value* arg_overload = (arg0);
         redassert(arg_overload);
 
         encode(&fn_builder, (Instruction) { mov, { reg.rax, arg_overload->operand } });
 
-        ValueOverload* width_value = NEW(ValueOverload, 1);
-        *width_value = (const ValueOverload){
+        Value* width_value = NEW(Value, 1);
+        *width_value = (const Value){
             .descriptor = (Descriptor*)width_field->descriptor,
             .operand = {
                 .type = OperandType_MemoryIndirect,
@@ -3794,8 +3682,8 @@ void test_structs(void)
                 },
             },
         };
-        ValueOverload* height_value = NEW(ValueOverload, 1);
-        *height_value = (const ValueOverload){
+        Value* height_value = NEW(Value, 1);
+        *height_value = (const Value){
             .descriptor = (Descriptor*)height_field->descriptor,
             .operand = {
                 .type = OperandType_MemoryIndirect,
@@ -3807,7 +3695,7 @@ void test_structs(void)
             },
         };
 
-        Return(rns_signed_mul_immediate(&fn_builder, single_overload_value(width_value), single_overload_value(height_value)));
+        Return(rns_signed_mul_immediate(&fn_builder, (width_value), (height_value)));
     }
 
     typedef struct { s32 width; s64 height; s32 dummy; } size_struct;
@@ -3912,8 +3800,8 @@ void test_fibonacci(void)
         {
             Return(s64_value(1));
         }
-        Stack_s64(n_minus_one, get_if_single_overload(rns_sub(&fn_builder, n, s64_value(1))));
-        Stack_s64(n_minus_two, get_if_single_overload(rns_sub(&fn_builder, n, s64_value(2))));
+        Stack_s64(n_minus_one, (rns_sub(&fn_builder, n, s64_value(1))));
+        Stack_s64(n_minus_two, (rns_sub(&fn_builder, n, s64_value(2))));
         Return(rns_add(&fn_builder, Call(fib, n_minus_one), Call(fib, n_minus_two)));
     }
 
@@ -3969,7 +3857,7 @@ void test_basic_parametric_polymorphism(void)
 void test_sizeof_values(void)
 {
     Value* sizeof_s32 = SizeOfValue(s32_value(0));
-    ValueOverload* overload = get_if_single_overload(sizeof_s32);
+    Value* overload = (sizeof_s32);
     redassert(overload);
     redassert(overload->operand.type == OperandType_Immediate && overload->operand.size == OperandSize_64);
     redassert(overload->operand.imm._64 == 4);
@@ -3978,7 +3866,7 @@ void test_sizeof_values(void)
 void test_sizeof_types(void)
 {
     Value* sizeof_s32 = SizeOfDescriptor(&descriptor_s32);
-    ValueOverload* overload = get_if_single_overload(sizeof_s32);
+    Value* overload = (sizeof_s32);
     redassert(overload);
     redassert(overload->operand.type == OperandType_Immediate && overload->operand.size == OperandSize_64);
     redassert(overload->operand.imm._64 == 4);
@@ -3994,7 +3882,7 @@ void test_struct_reflection(void)
 
     Function(field_count)
     {
-        ValueOverload* overload = get_if_single_overload(fn_reflect(&fn_builder, point_struct_descriptor));
+        Value* overload = (fn_reflect(&fn_builder, point_struct_descriptor));
         Stack(struct_, &descriptor_struct_reflection, overload);
         Return(struct_get_field(struct_, "field_count"));
     }
@@ -4002,6 +3890,8 @@ void test_struct_reflection(void)
     redassert(count == 2);
 }
 
+typedef s64 RetS64ParamVoid(void);
+// @AdhocPolymorphism
 void test_polymorphic_values(void)
 {
     Function(sizeof_s32)
@@ -4016,18 +3906,18 @@ void test_polymorphic_values(void)
         (void)x;
         Return(s64_value(sizeof(s64)));
     }
-    ValueOverload* a = get_if_single_overload(s32_value(0));
-    ValueOverload* b = get_if_single_overload(s64_value(0));
-    ValueOverload* overload_list[] = { a, b };
 
-    Value overload = {
-        .overload_list = overload_list,
-        .overload_count = array_length(overload_list),
-    };
+    sizeof_s32->descriptor->function.next_overload = sizeof_s64;
+    Function(checker_value)
+    {
+        Value* a = Call(sizeof_s32, s64_value(0));
+        Value* b = Call(sizeof_s32, s32_value(0));
+        Return(rns_add(&fn_builder, a, b));
+    }
 
-    ValueOverloadPair* pair = get_matching_values(&overload, s64_value(0));
-    redassert(pair);
-    redassert(typecheck_overloads(pair->a, b));
+    RetS64ParamVoid* checker_fn = value_as_function(checker_value, RetS64ParamVoid);
+    s64 result = checker_fn();
+    redassert(result == sizeof(s64) + sizeof(s32));
 }
 
 // @TODO: Can't test this
@@ -4048,15 +3938,15 @@ void test_rip_addressing_mode(void)
 
 Value* cast_to_tag(FunctionBuilder* fn_builder, const char* name, Value* value)
 {
-    ValueOverload* overload = get_if_single_overload(value);
+    Value* overload = (value);
     redassert(overload);
     redassert(overload->descriptor->type == DescriptorType_Pointer);
     Descriptor* descriptor = overload->descriptor->pointer_to;
 
     // @TODO:
     redassert(overload->operand.type == OperandType_Register);
-    ValueOverload* tag_overload = NEW(ValueOverload, 1);
-    *tag_overload = (const ValueOverload){
+    Value* tag_overload = NEW(Value, 1);
+    *tag_overload = (const Value){
         .descriptor = &descriptor_s64,
         .operand = {
             .type = OperandType_MemoryIndirect,
@@ -4078,20 +3968,20 @@ Value* cast_to_tag(FunctionBuilder* fn_builder, const char* name, Value* value)
             };
 
             Descriptor* pointer_descriptor = descriptor_pointer_to(constructor_descriptor);
-            ValueOverload* result_overload = NEW(ValueOverload, 1);
-            *result_overload = (const ValueOverload){
+            Value* result_overload = NEW(Value, 1);
+            *result_overload = (const Value){
                 .descriptor = pointer_descriptor,
                 .operand = reg.rbx,
             };
-            move_value(fn_builder, result_overload, get_if_single_overload(s64_value(0)));
+            move_value(fn_builder, result_overload, (s64_value(0)));
 
-            Value* comparison = compare(fn_builder, Cmp_Equal, single_overload_value(tag_overload), s64_value(i));
+            Value* comparison = compare(fn_builder, Cmp_Equal, (tag_overload), s64_value(i));
 
-            Value* result_value = single_overload_value(result_overload);
+            Value* result_value = (result_overload);
             IF_BUILDER(fn_builder, comparison)
             {
                 move_value(fn_builder, result_overload, overload);
-                move_value(fn_builder, result_overload, get_if_single_overload(rns_add(fn_builder, single_overload_value(result_overload), s64_value(sizeof(s64)))));
+                move_value(fn_builder, result_overload, (rns_add(fn_builder, (result_overload), s64_value(sizeof(s64)))));
             }
 
             return result_value;
@@ -4160,9 +4050,9 @@ void test_hello_world_lea(void)
     s32 hi_s32 = *(s32*)hi;
     Function(hello_world)
     {
-        ValueOverload* message_overload = stack_reserve(&fn_builder, &message_descriptor);
-        move_value(&fn_builder, message_overload, get_if_single_overload(s32_value(hi_s32)));
-        Call(puts_value, value_pointer_to(&fn_builder, single_overload_value(message_overload)));
+        Value* message_overload = stack_reserve(&fn_builder, &message_descriptor);
+        move_value(&fn_builder, message_overload, s32_value(hi_s32));
+        Call(puts_value, value_pointer_to(&fn_builder, message_overload));
     }
     typedef void RetVoidParamVoid(void);
     value_as_function(hello_world, RetVoidParamVoid)();
@@ -4178,7 +4068,6 @@ LargeStruct test()
     return (LargeStruct) { 42, 84 };
 }
 
-
 void test_large_size_return(void)
 {
     StructBuilder struct_builder = struct_begin();
@@ -4186,8 +4075,8 @@ void test_large_size_return(void)
     struct_add_field(&struct_builder, &descriptor_u64, "y");
     Descriptor* point_struct_descriptor = struct_end(&struct_builder);
 
-    ValueOverload* return_overload = NEW(ValueOverload, 1);
-    *return_overload = (ValueOverload)
+    Value* return_overload = NEW(Value, 1);
+    *return_overload = (Value)
     {
         .descriptor = point_struct_descriptor,
         .operand = {
@@ -4209,8 +4098,8 @@ void test_large_size_return(void)
         },
     };
 
-    ValueOverload* c_test_fn_overload = NEW(ValueOverload, 1);
-    *c_test_fn_overload = (ValueOverload){
+    Value* c_test_fn_overload = NEW(Value, 1);
+    *c_test_fn_overload = (Value){
         .descriptor = c_test_fn_descriptor,
         .operand = {
             .type = OperandType_Immediate,
@@ -4219,7 +4108,7 @@ void test_large_size_return(void)
         },
     };
 
-    Value* c_test_fn_value = single_overload_value(c_test_fn_overload);
+    Value* c_test_fn_value = (c_test_fn_overload);
 
     Function(checker_value)
     {
@@ -4228,7 +4117,6 @@ void test_large_size_return(void)
         Return(x);
     }
 
-    typedef s64 RetS64ParamVoid(void);
     RetS64ParamVoid* checker_value_fn = value_as_function(checker_value, RetS64ParamVoid);
     s64 result = checker_value_fn();
     redassert(result == 42);
