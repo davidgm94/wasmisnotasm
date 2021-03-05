@@ -65,6 +65,7 @@ typedef enum OperandType
     OperandType_Immediate,
     OperandType_MemoryIndirect,
     OperandType_Relative,
+    OperandType_RIP_Relative,
 } OperandType;
 
 typedef enum SIBScale
@@ -189,6 +190,10 @@ typedef union OperandRelative
     } _80;
 } OperandRelative;
 
+typedef struct OperandRIPRelative
+{
+    u64 address;
+} OperandRIPRelative;
 typedef struct Operand
 {
     OperandType type;
@@ -197,8 +202,9 @@ typedef struct Operand
     {
         Register reg;
         OperandImmediate imm;
-        OperandMemoryIndirect mem_indirect;
+        OperandMemoryIndirect indirect;
         OperandRelative rel;
+        OperandRIPRelative rip_rel;
     };
 } Operand;
 
@@ -212,6 +218,7 @@ typedef enum DescriptorType
     DescriptorType_Function,
     DescriptorType_FunctionOverloadSet,
     DescriptorType_Struct,
+    DescriptorType_TaggedUnion,
 } DescriptorType;
 
 typedef struct Value Value;
@@ -244,9 +251,16 @@ typedef struct DescriptorStructField
 
 typedef struct DescriptorStruct
 {
+    const char* name;
     struct DescriptorStructField* field_list;
     s64 field_count;
 } DescriptorStruct;
+
+typedef struct DescriptorTaggedUnion
+{
+    DescriptorStruct* struct_list;
+    s64 struct_count;
+} DescriptorTaggedUnion;
 
 typedef struct Descriptor
 {
@@ -258,10 +272,33 @@ typedef struct Descriptor
         const struct Descriptor* pointer_to;
         DescriptorFixedSizeArray fixed_size_array;
         DescriptorStruct struct_;
+        DescriptorTaggedUnion tagged_union;
     };
 } Descriptor;
 
 const u32 pointer_size = sizeof(usize);
+s64 descriptor_size(const Descriptor* descriptor);
+s64 descriptor_struct_size(DescriptorStruct* descriptor)
+{
+    s64 field_count = descriptor->field_count;
+    redassert(field_count);
+    s64 alignment = 0;
+    s64 raw_size = 0;
+
+    for (s64 i = 0; i < field_count; i++)
+    {
+        DescriptorStructField* field = &descriptor->field_list[i];
+        s64 field_size = descriptor_size(field->descriptor);
+        alignment = MAX(alignment, field_size);
+        bool is_last_field = i == field_count - 1;
+        if (is_last_field)
+        {
+            raw_size = field->offset + field_size;
+        }
+    }
+
+    return align(raw_size, alignment);
+}
 
 s64 descriptor_size(const Descriptor* descriptor)
 {
@@ -270,26 +307,24 @@ s64 descriptor_size(const Descriptor* descriptor)
     {
         case DescriptorType_Void:
             return 0;
-        case DescriptorType_Struct:
+        case DescriptorType_TaggedUnion:
         {
-            s64 field_count = descriptor->struct_.field_count;
-            redassert(field_count);
-            s64 alignment = 0;
-            s64 raw_size = 0;
-
-            for (s64 i = 0; i < field_count; i++)
+            s64 struct_count = descriptor->tagged_union.struct_count;
+            // @TODO: maybe change this?
+            u32 tag_size = sizeof(s64);
+            s64 body_size = 0;
+            for (s64 i = 0; i < struct_count; i++)
             {
-                DescriptorStructField* field = &descriptor->struct_.field_list[i];
-                s64 field_size = descriptor_size(field->descriptor);
-                alignment = MAX(alignment, field_size);
-                bool is_last_field = i == field_count - 1;
-                if (is_last_field)
-                {
-                    raw_size = field->offset + field_size;
-                }
+                DescriptorStruct* struct_ = &descriptor->tagged_union.struct_list[i];
+                s64 struct_size = descriptor_struct_size(struct_);
+                body_size = max(body_size, struct_size);
             }
 
-            return align(raw_size, alignment);
+            return tag_size + body_size;
+        }
+        case DescriptorType_Struct:
+        {
+            return descriptor_struct_size((DescriptorStruct*)&descriptor->struct_);
         }
         case DescriptorType_Integer:
             return descriptor->integer.size;
@@ -638,6 +673,15 @@ static inline Operand rel64(u64 value)
     return (const Operand)_rel(64, value);
 }
 
+static inline Operand rip_rel(u64 address)
+{
+    return (const Operand) {
+        .type = OperandType_RIP_Relative,
+        .rip_rel.address = address,
+        .size = OperandSize_64,
+    };
+}
+
 static inline Register get_stack_register(void)
 {
     switch (calling_convention)
@@ -658,7 +702,7 @@ static inline Operand stack(s32 offset, s32 size)
     return (const Operand)
     {
         .type = OperandType_MemoryIndirect,
-        .mem_indirect =
+        .indirect =
         {
             .reg = get_stack_register(),
             .displacement = offset,
@@ -2294,12 +2338,12 @@ bool typecheck(const Descriptor* a, const Descriptor* b)
             }
 
             return true;
-        case DescriptorType_Struct:
-            return a == b;
         case DescriptorType_FixedSizeArray:
             return typecheck(a->fixed_size_array.data, b->fixed_size_array.data) && a->fixed_size_array.len == b->fixed_size_array.len;
         case DescriptorType_Pointer:
             return typecheck(a->pointer_to, b->pointer_to);
+        case DescriptorType_Struct: case DescriptorType_TaggedUnion:
+            return a == b;
         default:
             return descriptor_size(a) == descriptor_size(b);
     }
@@ -2459,13 +2503,19 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
                 case OperandType_MemoryIndirect:
                 {
                     mod = Mod_Displacement_32;
-                    r_m = operand.mem_indirect.reg;
-                    need_sib = operand.mem_indirect.reg == get_stack_register();
+                    r_m = operand.indirect.reg;
+                    need_sib = operand.indirect.reg == get_stack_register();
 
                     if (need_sib)
                     {
                         sib_byte = (SIBScale_1 << 6) | (r_m << 3) | (r_m);
                     }
+                    break;
+                }
+                case OperandType_RIP_Relative:
+                {
+                    r_m = 0b101;
+                    mod = 0;
                     break;
                 }
                 default:
@@ -2520,31 +2570,46 @@ void encode(FunctionBuilder* fn_builder, Instruction instruction)
         for (u32 oi = 0; oi < operand_count; oi++)
         {
             Operand op = instruction.operands[oi];
-            if (op.type == OperandType_MemoryIndirect)
+            switch (op.type)
             {
-                switch (mod)
+                case OperandType_MemoryIndirect:
+                    switch (mod)
+                    {
+                        case Mod_Displacement_8:
+                            s8_append(fn_builder->eb, (s8)op.indirect.displacement);
+                            break;
+                        case Mod_Displacement_32:
+                            if (need_sib)
+                            {
+                                offset_of_displacement = fn_builder->eb->len;
+                                stack_size = op.size;
+                                redassert(fn_builder->stack_displacement_count < MAX_DISPLACEMENT_COUNT);
+                                s32* location = (s32*)(fn_builder->eb->ptr + offset_of_displacement);
+                                fn_builder->stack_displacements[fn_builder->stack_displacement_count] = (const StackPatch){
+                                    .location = location,
+                                    .size = stack_size,
+                                };
+                                fn_builder->stack_displacement_count++;
+                            }
+                            s32_append(fn_builder->eb, op.indirect.displacement);
+                            break;
+                        default:
+                            break;
+                    }
+                    break;
+                case OperandType_RIP_Relative:
                 {
-                    case Mod_Displacement_8:
-                        s8_append(fn_builder->eb, (s8)op.mem_indirect.displacement);
-                        break;
-                    case Mod_Displacement_32:
-                        if (need_sib)
-                        {
-                            offset_of_displacement = fn_builder->eb->len;
-                            stack_size = op.size;
-                            redassert(fn_builder->stack_displacement_count < MAX_DISPLACEMENT_COUNT);
-                            s32* location = (s32*)(fn_builder->eb->ptr + offset_of_displacement);
-                            fn_builder->stack_displacements[fn_builder->stack_displacement_count] = (const StackPatch){
-                                .location = location,
-                                .size = stack_size,
-                            };
-                            fn_builder->stack_displacement_count++;
-                        }
-                        s32_append(fn_builder->eb, op.mem_indirect.displacement);
-                        break;
-                    default:
-                        break;
+                    u64 start_address = (u64)fn_builder->eb->ptr;
+                    u64 end_address = start_address + fn_builder->eb->cap;
+                    redassert(op.rip_rel.address >= start_address && op.rip_rel.address <= end_address);
+                    u64 next_instruction_address = start_address + fn_builder->eb->len + sizeof(s32);
+                    s64 displacement = op.rip_rel.address - next_instruction_address;
+                    redassert(displacement < INT32_MAX && displacement > INT32_MIN);
+                    s32_append(fn_builder->eb, (s32)displacement);
+                    break;
                 }
+                default:
+                    break;
             }
         }
     }
@@ -3049,9 +3114,25 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
     u32 parameter_stack_size = (u32)MAX(4, arg_count) * 8;
     fn_builder->max_call_parameter_stack_size = MAX(fn_builder->max_call_parameter_stack_size, parameter_stack_size);
 
-    ValueOverload* reg_a = reg_value(Register_A, fn->descriptor);
-    move_value(fn_builder, reg_a, fn);
-    encode(fn_builder, (Instruction) { call, { reg_a->operand } });
+    u64 start_address = (u64)fn_builder->eb->ptr;
+    u64 end_address = start_address + fn_builder->eb->len;
+
+#if 0
+    if (fn->operand.type == OperandType_Immediate && fn->operand.size == OperandSize_64 && fn->operand.imm._64 >= start_address && fn->operand.imm._64 <= end_address)
+    {
+        Operand rip_relative = rip_rel(fn->operand.imm._64 - start_address);
+        encode(fn_builder, (Instruction) { call, { rip_relative } });
+    }
+    else
+    {
+#endif
+        ValueOverload* reg_a = reg_value(Register_A, fn->descriptor);
+        move_value(fn_builder, reg_a, fn);
+        encode(fn_builder, (Instruction) { call, { reg_a->operand } });
+#if 0
+    }
+#endif
+
 
     ValueOverload* result = stack_reserve(fn_builder, descriptor->return_value->descriptor);
     move_value(fn_builder, result, descriptor->return_value);
@@ -3191,11 +3272,41 @@ Descriptor* struct_end(StructBuilder* struct_builder)
     return result;
 }
 
+ValueOverload* ensure_memory(ValueOverload* overload)
+{
+    Operand operand = overload->operand;
+    if (operand.type == OperandType_MemoryIndirect)
+    {
+        return overload;
+    }
+    
+    ValueOverload* result = NEW(ValueOverload, 1);
+    if (overload->descriptor->type != DescriptorType_Pointer)
+        redassert(!"Not implemented");
+    if (overload->operand.type != OperandType_Register)
+        redassert(!"Not implemented");
+
+    *result = (const ValueOverload){
+        .descriptor = overload->descriptor->pointer_to,
+        .operand = {
+            .type = OperandType_MemoryIndirect,
+            .indirect = {
+                .reg = overload->operand.reg,
+                .displacement = 0,
+            }
+        },
+    };
+
+    return result;
+}
+
+
 Value* struct_get_field(Value* struct_value, const char* name)
 {
-    ValueOverload* overload = get_if_single_overload(struct_value);
-    redassert(overload);
-    Descriptor* descriptor = overload->descriptor;
+    ValueOverload* raw_overload = get_if_single_overload(struct_value);
+    redassert(raw_overload);
+    ValueOverload* struct_overload = ensure_memory(raw_overload);
+    Descriptor* descriptor = struct_overload->descriptor;
     redassert(descriptor->type == DescriptorType_Struct);
 
     for (s64 i = 0; i < descriptor->struct_.field_count; ++i)
@@ -3206,8 +3317,8 @@ Value* struct_get_field(Value* struct_value, const char* name)
             ValueOverload* result = NEW(ValueOverload, 1);
             // support more operands
             //redassert(overload->descriptor->type == OperandType_MemoryIndirect);
-            Operand operand = overload->operand;
-            operand.mem_indirect.displacement += (s32)field->offset;
+            Operand operand = struct_overload->operand;
+            operand.indirect.displacement += (s32)field->offset;
             *result = (const ValueOverload){
                 .descriptor = (Descriptor*)field->descriptor,
                 .operand = operand,
@@ -3357,8 +3468,11 @@ void print_fn(void)
 
 Value* rns_arithmetic(FunctionBuilder* fn_builder, Mnemonic arithmetic_instruction, ValueOverload* a, ValueOverload* b)
 {
-    redassert(typecheck_overloads(a, b));
-    redassert(a->descriptor->type == DescriptorType_Integer);
+    if (!(a->descriptor->type == DescriptorType_Pointer && b->descriptor->type == DescriptorType_Integer && b->descriptor->integer.size == 8))
+    {
+        redassert(typecheck_overloads(a, b));
+        redassert(a->descriptor->type == DescriptorType_Integer);
+    }
     assert_not_register(a, Register_A);
     assert_not_register(b, Register_A);
 
@@ -3568,7 +3682,7 @@ void test_array_loop(void)
             {
                 .type = OperandType_MemoryIndirect,
                 .size = array_elem_size,
-                .mem_indirect = {
+                .indirect = {
                     .reg = reg.rax.reg,
                     .displacement = 0,
                 },
@@ -3612,7 +3726,7 @@ void test_structs(void)
             .operand = {
                 .type = OperandType_MemoryIndirect,
                 .size = (u32)descriptor_size(width_field->descriptor),
-                .mem_indirect = {
+                .indirect = {
                     .displacement = (s32)width_field->offset,
                     .reg = reg.rax.reg,
                 },
@@ -3624,7 +3738,7 @@ void test_structs(void)
             .operand = {
                 .type = OperandType_MemoryIndirect,
                 .size = (u32)descriptor_size(height_field->descriptor),
-                .mem_indirect = {
+                .indirect = {
                     .displacement = (s32)height_field->offset,
                     .reg = reg.rax.reg,
                 },
@@ -3854,10 +3968,121 @@ void test_polymorphic_values(void)
     redassert(typecheck_overloads(pair->a, b));
 }
 
+// @TODO: Can't test this
+void test_rip_addressing_mode(void)
+{
+    Function(return_42)
+    {
+        Return(s32_value(42));
+    }
+    Function(checker_value)
+    {
+        Return(call_function_value(&fn_builder, return_42, NULL, 0));
+    }
+
+    RetS32ParamVoid* fn = value_as_function(checker_value, RetS32ParamVoid);
+    redassert(fn() == 42);
+}
+
+Value* cast_to_tag(FunctionBuilder* fn_builder, const char* name, Value* value)
+{
+    ValueOverload* overload = get_if_single_overload(value);
+    redassert(overload);
+    redassert(overload->descriptor->type == DescriptorType_Pointer);
+    Descriptor* descriptor = overload->descriptor->pointer_to;
+
+    // @TODO:
+    redassert(overload->operand.type == OperandType_Register);
+    ValueOverload* tag_overload = NEW(ValueOverload, 1);
+    *tag_overload = (const ValueOverload){
+        .descriptor = &descriptor_s64,
+        .operand = {
+            .type = OperandType_MemoryIndirect,
+            .indirect = {.reg = overload->operand.reg, .displacement = 0 },
+        }
+    };
+    s64 struct_count = descriptor->tagged_union.struct_count;
+
+    for (s64 i = 0; i < struct_count; i++)
+    {
+        DescriptorStruct* struct_ = &descriptor->tagged_union.struct_list[i];
+        if (strcmp(struct_->name, name) == 0)
+        {
+            Descriptor* constructor_descriptor = NEW(Descriptor, 1);
+            *constructor_descriptor = (Descriptor)
+            {
+                .type = DescriptorType_Struct,
+                .struct_ = *struct_,
+            };
+
+            Descriptor* pointer_descriptor = descriptor_pointer_to(constructor_descriptor);
+            ValueOverload* result_overload = NEW(ValueOverload, 1);
+            *result_overload = (const ValueOverload){
+                .descriptor = pointer_descriptor,
+                .operand = reg.rbx,
+            };
+            move_value(fn_builder, result_overload, get_if_single_overload(s64_value(0)));
+
+            Value* comparison = compare(fn_builder, Cmp_Equal, single_overload_value(tag_overload), s64_value(i));
+
+            for (LabelPatch32 patch_ = make_if(fn_builder, comparison), *__dummy_index___ = 0; !(__dummy_index___++); make_jump_label(fn_builder, patch_))
+            {
+                move_value(fn_builder, result_overload, overload);
+                move_value(fn_builder, result_overload, get_if_single_overload(rns_add(fn_builder, single_overload_value(result_overload), s64_value(sizeof(s64)))));
+            }
+
+            return single_overload_value(result_overload);
+        }
+    }
+
+    redassert(!"Could not find specified name in the tagged union");
+    return NULL;
+}
+
+void test_tagged_unions(void)
+{
+    DescriptorStructField some_fields[] = {
+        {.name = "value", .descriptor = &descriptor_s64, .offset = 0, },
+    };
+
+    DescriptorStruct constructors[] = {
+        {.name = "None", .field_count = 0, .field_list = NULL},
+        {.name = "Some", .field_count = array_length(some_fields), .field_list = some_fields},
+    };
+
+    Descriptor option_s64_descriptor = {
+        .type = DescriptorType_TaggedUnion,
+        .tagged_union = {
+            .struct_count = array_length(constructors),
+            .struct_list = constructors,
+        }
+    };
+
+    Function(with_default_value)
+    {
+        Arg(option_value, descriptor_pointer_to(&option_s64_descriptor));
+        Arg_s64(default_value);
+        Value* some = cast_to_tag(&fn_builder, "Some", option_value);
+        IF(some)
+        {
+            Value* value = struct_get_field(some, "value");
+            Return(value);
+        }
+
+        Return(default_value);
+    }
+
+    typedef s64 RetS64ParamVoidStar_s64(void*, s64);
+    RetS64ParamVoidStar_s64* with_default = value_as_function(with_default_value, RetS64ParamVoidStar_s64);
+    struct { s64 tag; s64 maybe_value; } test_none = {0};
+    struct { s64 tag; s64 maybe_value; } test_some = {1, 21};
+    redassert(with_default(&test_none, 42) == 42);
+    redassert(with_default(&test_some, 42) == 21);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    tests_arguments_on_the_stack();
-    //test_struct_reflection();
+    test_tagged_unions();
 }
 
 s32 main(s32 argc, char* argv[])
