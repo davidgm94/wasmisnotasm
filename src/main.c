@@ -1592,7 +1592,7 @@ const InstructionEncoding lfs_encoding[] = { 0 };
 const InstructionEncoding lgs_encoding[] = { 0 };
 const InstructionEncoding lea_encoding[] =
 {
-    ENCODING(OP_CODE(0x8D), ENC_OPTS(0),
+    ENCODING(OP_CODE(0x8D), ENC_OPTS(.type = Reg),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 16), OP(OET_Memory, 64))),
         OP_COMB(OPTS(0),                    OPS(OP(OET_Register, 32), OP(OET_Memory, 64))),
         OP_COMB(OPTS(.rex_byte = RexW),     OPS(OP(OET_Register, 64), OP(OET_Memory, 64))),
@@ -2312,10 +2312,11 @@ typedef struct FunctionBuilder
 
     JumpPatchList* return_patch_list;
     Value** result;
-    s32 stack_offset;
-    u32 max_call_parameter_stack_size;
+    s64 stack_offset;
+    s64 max_call_parameter_stack_size;
     u8 next_arg;
 } FunctionBuilder;
+
 
 bool typecheck(const Descriptor* a, const Descriptor* b)
 {
@@ -2791,7 +2792,7 @@ ValueOverload* stack_reserve(FunctionBuilder* fn_builder, const Descriptor* desc
         case SYSTEMV:
         case MSVC:
             fn_builder->stack_offset += size;
-            reserved = stack(-fn_builder->stack_offset, size);
+            reserved = stack((s32)-fn_builder->stack_offset, size);
             break;
         default:
             RED_NOT_IMPLEMENTED;
@@ -3119,6 +3120,25 @@ u64 helper_value_as_function(Value* value)
     return overload->operand.imm._64;
 }
 
+Value* value_pointer_to(FunctionBuilder* fn_builder, Value* value)
+{
+    ValueOverload* overload = get_if_single_overload(value);
+    redassert(overload);
+
+    // TODO: support registers
+    // TODO: support immediates
+    redassert(overload->operand.type == OperandType_MemoryIndirect || overload->operand.type == OperandType_RIP_Relative);
+    Descriptor* result_descriptor = descriptor_pointer_to(overload->descriptor);
+    ValueOverload* reg_a = reg_value(Register_A, result_descriptor);
+    encode(fn_builder, (Instruction) {
+        lea, {reg_a->operand, overload->operand}
+    });
+    ValueOverload* result = stack_reserve(fn_builder, result_descriptor);
+    move_value(fn_builder, result, reg_a);
+
+    return single_overload_value(result);
+}
+
 #define value_as_function(_value_, _type_) ((_type_*)helper_value_as_function(_value_))
 
 Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, ValueOverload** arg_list, s64 arg_count)
@@ -3135,7 +3155,18 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
         move_value(fn_builder, &descriptor->arg_list[i], arg_list[i]);
     }
 
-    u32 parameter_stack_size = (u32)MAX(4, arg_count) * 8;
+    s64 parameter_stack_size = MAX(4, arg_count) * 8;
+
+    // @TODO: support this for function that accepts arguments
+    s64 return_size = descriptor_size(descriptor->return_value->descriptor);
+    if (return_size > 8)
+    {
+        parameter_stack_size += return_size;
+        Descriptor* return_pointer_descriptor = descriptor_pointer_to(descriptor->return_value->descriptor);
+        ValueOverload* reg_c = reg_value(Register_C, return_pointer_descriptor);
+        encode(fn_builder, (Instruction) { lea, { reg_c->operand, descriptor->return_value->operand } });
+    }
+
     fn_builder->max_call_parameter_stack_size = MAX(fn_builder->max_call_parameter_stack_size, parameter_stack_size);
 
     u64 start_address = (u64)fn_builder->eb->ptr;
@@ -3160,10 +3191,14 @@ Value* call_function_overload(FunctionBuilder* fn_builder, ValueOverload* fn, Va
         encode(fn_builder, (Instruction) { call, { reg_a->operand } });
     }
 
-    ValueOverload* result = stack_reserve(fn_builder, descriptor->return_value->descriptor);
-    move_value(fn_builder, result, descriptor->return_value);
+    if (return_size <= 8)
+    {
+        ValueOverload* result = stack_reserve(fn_builder, descriptor->return_value->descriptor);
+        move_value(fn_builder, result, descriptor->return_value);
+        return single_overload_value(result);
+    }
 
-    return single_overload_value(result);
+    return single_overload_value(descriptor->return_value);
 }
 
 Value* call_function_value(FunctionBuilder* fn_builder, Value* fn, Value** arg_list, s64 arg_count)
@@ -4108,24 +4143,6 @@ void test_tagged_unions(void)
     redassert(with_default(&test_some, 42) == 21);
 }
 
-Value* value_pointer_to(FunctionBuilder* fn_builder, Value* value)
-{
-    ValueOverload* overload = get_if_single_overload(value);
-    redassert(overload);
-
-    // TODO: support registers
-    // TODO: support immediates
-    redassert(overload->operand.type == OperandType_MemoryIndirect || overload->operand.type == OperandType_RIP_Relative);
-    Descriptor* result_descriptor = descriptor_pointer_to(overload->descriptor);
-    ValueOverload* reg_a = reg_value(Register_A, result_descriptor);
-    encode(fn_builder, (Instruction) {
-        lea, {reg_a->operand, overload->operand}
-    });
-    ValueOverload* result = stack_reserve(fn_builder, result_descriptor);
-    move_value(fn_builder, result, reg_a);
-
-    return single_overload_value(result);
-}
 
 void test_hello_world_lea(void)
 {
@@ -4151,9 +4168,75 @@ void test_hello_world_lea(void)
     value_as_function(hello_world, RetVoidParamVoid)();
 }
 
+typedef struct LargeStruct
+{
+    u64 x, y;
+} LargeStruct;
+
+LargeStruct test()
+{
+    return (LargeStruct) { 42, 84 };
+}
+
+
+void test_large_size_return(void)
+{
+    StructBuilder struct_builder = struct_begin();
+    struct_add_field(&struct_builder, &descriptor_u64, "x");
+    struct_add_field(&struct_builder, &descriptor_u64, "y");
+    Descriptor* point_struct_descriptor = struct_end(&struct_builder);
+
+    ValueOverload* return_overload = NEW(ValueOverload, 1);
+    *return_overload = (ValueOverload)
+    {
+        .descriptor = point_struct_descriptor,
+        .operand = {
+            .type = OperandType_MemoryIndirect,
+            .indirect = {
+                .reg = reg.rsp.reg,
+                .displacement = 0,
+            }
+        }
+    };
+
+    Descriptor* c_test_fn_descriptor = NEW(Descriptor, 1);
+    *c_test_fn_descriptor = (Descriptor)
+    {
+        .type = DescriptorType_Function,
+        .function = {
+            .arg_count = 0,
+            .return_value = return_overload,
+        },
+    };
+
+    ValueOverload* c_test_fn_overload = NEW(ValueOverload, 1);
+    *c_test_fn_overload = (ValueOverload){
+        .descriptor = c_test_fn_descriptor,
+        .operand = {
+            .type = OperandType_Immediate,
+            .size = OperandSize_64,
+            .imm._64 = (u64)(test)
+        },
+    };
+
+    Value* c_test_fn_value = single_overload_value(c_test_fn_overload);
+
+    Function(checker_value)
+    {
+        Value* test_result = call_function_value(&fn_builder, c_test_fn_value, NULL, 0);
+        Value* x = struct_get_field(test_result, "x");
+        Return(x);
+    }
+
+    typedef s64 RetS64ParamVoid(void);
+    RetS64ParamVoid* checker_value_fn = value_as_function(checker_value, RetS64ParamVoid);
+    s64 result = checker_value_fn();
+    redassert(result == 42);
+}
+
 void wna_main(s32 argc, char* argv[])
 {
-    test_hello_world_lea();
+    test_large_size_return();
 }
 
 s32 main(s32 argc, char* argv[])
